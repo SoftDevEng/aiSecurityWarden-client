@@ -803,6 +803,270 @@
    }
   ]
  },
+ "actions": {
+  "digests": [
+   {
+    "action": "gmail.send",
+    "args": {
+     "to": [
+      "bob@example.com"
+     ],
+     "subject": "Invoice 1042",
+     "body_sha256": "abababababababababababababababababababababababababababababababab",
+     "attachments": []
+    },
+    "digest": "d890408c17f091c223030efa927eeffed02f351a7fed76ac09434fa698ba3c6e"
+   },
+   {
+    "action": "gmail.label",
+    "args": {
+     "ids": [
+      "18c2",
+      "18c3"
+     ],
+     "add": [
+      "Done"
+     ],
+     "remove": [
+      "INBOX"
+     ]
+    },
+    "digest": "12a721375bcaed371de71c39245b2138eab9c91043895bebb6d8bceb998ccae1"
+   },
+   {
+    "action": "webull.order.place",
+    "args": {
+     "symbol": "AAPL",
+     "qty": 3,
+     "side": "buy",
+     "limit": "189.50",
+     "dry": false,
+     "note": null,
+     "unicode": "café ✓"
+    },
+    "digest": "e6172cd51e3939625094aecc52b2ab134bea29ad93762fa467005f53596fc600"
+   },
+   {
+    "action": "x.y",
+    "args": {},
+    "digest": "05d6e933c518ab4827b6758c6da0e92d453ea1d1774d45a3ae4a4c95a0269b85"
+   }
+  ],
+  "summary": {
+   "project_id": "LWSJwzJ2Bw9RH1xjXczR1Q",
+   "project_key_hex": "3a74952d758319a26dde87305569c00064b68638b646731d6734477c0ced303e",
+   "request_id": "uergTfqzfMAfPLmt50Ouog",
+   "summary": {
+    "title": "Send an email",
+    "fields": [
+     [
+      "To",
+      "bob@example.com"
+     ],
+     [
+      "Subject",
+      "Invoice 1042"
+     ]
+    ],
+    "preview": "Hi Bob, attached is the invoice ✓",
+    "count": 1
+   },
+   "blob": "v1.Wol0wKhn6tZJcx4b9ebsNeVBojub1rKWhk3KXlyw26f3YmOuj30SvO6M8Gz-su0CLbmBuND7fRksR_z5Z8lSFs7tY4nk07a6fciZOf0iN-9MIof3hD7QTlUwP_FXS0bXkhOkql3Ho1ZAJW5lFTNHAUHbE-DgHbhCneULs5D0_KwanttBCZ4JUgSYzJFx1qirKzhltMij8nwxZFJDQApQTOjFQvR-_CioJHZhw1n7"
+  },
+  "summary_must_fail": [
+   {
+    "why": "another request id",
+    "project_id": "LWSJwzJ2Bw9RH1xjXczR1Q",
+    "request_id": "Zg8ilIg7eWLElg47wqK8Xg",
+    "blob": "v1.Wol0wKhn6tZJcx4b9ebsNeVBojub1rKWhk3KXlyw26f3YmOuj30SvO6M8Gz-su0CLbmBuND7fRksR_z5Z8lSFs7tY4nk07a6fciZOf0iN-9MIof3hD7QTlUwP_FXS0bXkhOkql3Ho1ZAJW5lFTNHAUHbE-DgHbhCneULs5D0_KwanttBCZ4JUgSYzJFx1qirKzhltMij8nwxZFJDQApQTOjFQvR-_CioJHZhw1n7"
+   },
+   {
+    "why": "another project",
+    "project_id": "P7GjgLNemoNaeFq5XNVy1g",
+    "request_id": "uergTfqzfMAfPLmt50Ouog",
+    "blob": "v1.Wol0wKhn6tZJcx4b9ebsNeVBojub1rKWhk3KXlyw26f3YmOuj30SvO6M8Gz-su0CLbmBuND7fRksR_z5Z8lSFs7tY4nk07a6fciZOf0iN-9MIof3hD7QTlUwP_FXS0bXkhOkql3Ho1ZAJW5lFTNHAUHbE-DgHbhCneULs5D0_KwanttBCZ4JUgSYzJFx1qirKzhltMij8nwxZFJDQApQTOjFQvR-_CioJHZhw1n7"
+   }
+  ],
+  "policy": {
+   "input": {
+    "channels": [
+     "admin_ui",
+     "push:telegram"
+    ],
+    "timeout": 7200,
+    "rules": [
+     {
+      "match": "gmail.read.*",
+      "mode": "allow"
+     },
+     {
+      "match": "gmail.label",
+      "mode": "window",
+      "window": 1800
+     },
+     {
+      "match": "gmail.delete",
+      "mode": "deny"
+     },
+     {
+      "match": "webull.*",
+      "mode": "each"
+     }
+    ]
+   },
+   "output": {
+    "channels": [
+     "admin_ui",
+     "push:telegram"
+    ],
+    "timeout": 7200,
+    "max_pending": 5,
+    "max_per_hour": 60,
+    "rules": [
+     {
+      "match": "gmail.read.*",
+      "mode": "allow"
+     },
+     {
+      "match": "gmail.label",
+      "mode": "window",
+      "window": 1800
+     },
+     {
+      "match": "gmail.delete",
+      "mode": "deny"
+     },
+     {
+      "match": "webull.*",
+      "mode": "each"
+     }
+    ]
+   },
+   "decisions": [
+    {
+     "action": "gmail.read.search",
+     "risk": "low",
+     "mode": "allow",
+     "window": null
+    },
+    {
+     "action": "gmail.read.message",
+     "risk": "high",
+     "mode": "each",
+     "window": null
+    },
+    {
+     "action": "gmail.label",
+     "risk": "low",
+     "mode": "window",
+     "window": 1800
+    },
+    {
+     "action": "gmail.label",
+     "risk": "high",
+     "mode": "each",
+     "window": null
+    },
+    {
+     "action": "gmail.delete",
+     "risk": "high",
+     "mode": "deny",
+     "window": null
+    },
+    {
+     "action": "gmail.send",
+     "risk": "high",
+     "mode": "each",
+     "window": null
+    },
+    {
+     "action": "webull",
+     "risk": "low",
+     "mode": null,
+     "window": null
+    },
+    {
+     "action": "webull.order.place",
+     "risk": "medium",
+     "mode": "each",
+     "window": null
+    },
+    {
+     "action": "gmail.readx.search",
+     "risk": "low",
+     "mode": "each",
+     "window": null
+    }
+   ],
+   "describe": "gmail.read.*=allow, gmail.label=window:30m, gmail.delete=deny, webull.*=each via admin_ui, push:telegram",
+   "describe_default": "ask for every action via admin_ui (default)"
+  },
+  "bad_policies": [
+   {
+    "rules": [
+     {
+      "match": "Gmail.send",
+      "mode": "each"
+     }
+    ]
+   },
+   {
+    "rules": [
+     {
+      "match": "gmail.*.send",
+      "mode": "each"
+     }
+    ]
+   },
+   {
+    "rules": [
+     {
+      "match": "gmail.send",
+      "mode": "sometimes"
+     }
+    ]
+   },
+   {
+    "rules": [
+     {
+      "match": "gmail.label",
+      "mode": "window"
+     }
+    ]
+   },
+   {
+    "rules": [
+     {
+      "match": "gmail.label",
+      "mode": "window",
+      "window": 10
+     }
+    ]
+   },
+   {
+    "rules": [
+     {
+      "match": "gmail.send",
+      "mode": "each",
+      "window": 60
+     }
+    ]
+   },
+   {
+    "timeout": 30
+   },
+   {
+    "channels": []
+   },
+   {
+    "surprise": 1
+   },
+   {
+    "max_pending": 9,
+    "max_per_hour": 3
+   }
+  ]
+ },
  "must_fail": {
   "open": [
    {

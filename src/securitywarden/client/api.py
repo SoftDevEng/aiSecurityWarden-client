@@ -11,7 +11,7 @@ import httpx
 
 from .. import crypto
 from ..crypto import Credential, CryptoError
-from ..approval import normalize_policy
+from ..approval import ACTION_RE, RISKS, normalize_action_policy, normalize_action_summary, normalize_policy
 from ..ipallow import normalize_allowed_ips
 
 
@@ -33,6 +33,8 @@ _APPROVAL_TEXT = {
     "approval_cancelled": "the approval request was cancelled (token revoked or its policy changed)",
     "approval_used": "the approval was already used",
     "approval_mismatch": "the approval belongs to a different process or address",
+    "action_denied": "this token's policy does not allow that action",
+    "action_mismatch": "the approval was for a different action",
 }
 
 ApprovalCallback = Callable[[dict[str, Any]], None]
@@ -68,6 +70,7 @@ class SecurityWardenClient:
         self._token_exp = 0.0
         self.on_approval = on_approval
         self._sleep = sleep
+        self._action_cfg: dict[str, Any] | None = None
 
     # -- transport --------------------------------------------------------------
 
@@ -142,6 +145,62 @@ class SecurityWardenClient:
             out[name] = value
         return out
 
+    # -- machine: action approval (see DESIGN.md "Action approval") ------------------
+
+    def action_config(self) -> dict[str, Any]:
+        """{"project_id", "wrapped_key", "summaries": "plain"|"encrypted"} for this token's project.
+        Cached: it only changes when the project's settings change."""
+        if self.cred.kind != crypto.KIND_MACHINE:
+            raise SecurityWardenError("actions need a machine token")
+        if self._action_cfg is None:
+            cfg = self._req("GET", "/v1/actions/config").json()
+            cfg["project_key"] = crypto.unwrap_project_key_for_token(cfg["wrapped_key"], self.cred, cfg["project_id"])
+            self._action_cfg = cfg
+        return self._action_cfg
+
+    def request_action(self, action: str, args: Any, summary: dict[str, Any], *, risk: str = "high") -> dict[str, Any]:
+        """Ask whether this token may perform ``action`` with exactly ``args`` now.
+
+        Returns ``{"status": "approved" | "pending", "request_id", "nonce", "digest", "match",
+        "expires_in", "check_after"}``. "approved": go ahead now (allowed by policy, or inside an approved
+        time window); the approval is already used up. "pending": a person has been asked; keep
+        ``request_id``, ``nonce`` and ``digest`` and call :meth:`check_action` later. Raises
+        :class:`ApprovalError` ("action_denied") when the policy forbids the action."""
+        if not ACTION_RE.match(action or ""):
+            raise SecurityWardenError("invalid action name (e.g. gmail.send)")
+        if risk not in RISKS:
+            raise SecurityWardenError(f"risk must be one of: {', '.join(RISKS)}")
+        try:
+            summary = normalize_action_summary(summary)
+        except ValueError as e:
+            raise SecurityWardenError(str(e)) from None
+        cfg = self.action_config()
+        rid, nonce = crypto.new_id(), crypto.new_nonce()
+        digest = crypto.action_digest(action, args)
+        body: dict[str, Any] = {"id": rid, "action": action, "risk": risk, "digest": digest, "nonce": nonce,
+                                "summary_enc": crypto.encrypt_action_summary(cfg["project_key"], cfg["project_id"],
+                                                                             rid, summary)}
+        if cfg.get("summaries") != "encrypted":
+            body["summary"] = summary
+        r = self._req("POST", "/v1/actions", json=body, accept_403=True)
+        if r.status_code == 403:
+            raise ApprovalError(_detail(r) if _detail(r).startswith("action_") else "action_denied")
+        data = r.json()
+        return {"status": data["status"], "request_id": rid, "nonce": nonce, "digest": digest,
+                "match": data.get("match"), "expires_in": data.get("expires_in"),
+                "check_after": data.get("check_after", 30)}
+
+    def check_action(self, request_id: str, nonce: str, digest: str) -> str:
+        """"approved" (and used up: perform the action now, once) or "pending". Raises
+        :class:`ApprovalError` when it was denied, expired, cancelled or already used."""
+        r = self._req("POST", f"/v1/actions/{request_id}", json={"nonce": nonce, "digest": digest}, accept_403=True)
+        if r.status_code == 202:
+            return "pending"
+        if r.status_code == 403:
+            reason = _detail(r)
+            raise ApprovalError(reason if reason.startswith(("approval_", "action_")) else "approval_denied")
+        return "approved"
+
     # -- admin: projects ----------------------------------------------------------
 
     def _require_admin(self) -> None:
@@ -196,9 +255,11 @@ class SecurityWardenClient:
     # -- admin: tokens ------------------------------------------------------------
 
     def create_token(self, project: str, name: str, expires_days: float | None = None,
-                     allowed_ips: list[str] | None = None, approval: dict[str, Any] | None = None) -> Credential:
+                     allowed_ips: list[str] | None = None, approval: dict[str, Any] | None = None,
+                     actions: dict[str, Any] | None = None) -> Credential:
         ips = _normalize_ips(allowed_ips)
         policy = _normalize_policy(approval)
+        action_policy = _normalize_actions(actions)
         proj = self._project(project)
         tok = crypto.new_credential(crypto.KIND_MACHINE)
         wk = crypto.wrap_project_key_for_token(self._project_key(proj), tok, proj["id"])
@@ -209,6 +270,8 @@ class SecurityWardenClient:
             body["allowed_ips"] = ips
         if policy:
             body["approval"] = policy
+        if action_policy:
+            body["actions"] = action_policy
         r = self._req("POST", "/v1/admin/tokens", json=body)
         if ips and r.json().get("allowed_ips") != ips:
             # a pre-0.2 server ignores the field; never hand back a token that is silently unrestricted
@@ -220,7 +283,20 @@ class SecurityWardenClient:
             self.revoke_token(tok.id)
             raise SecurityWardenError("server did not apply the approval policy (upgrade the server to 0.4.0); "
                                       "the token was revoked")
+        if action_policy and r.json().get("actions") != action_policy:
+            self.revoke_token(tok.id)
+            raise SecurityWardenError("server did not apply the action policy (upgrade the server to 0.6.0); "
+                                      "the token was revoked")
         return tok
+
+    def set_token_actions(self, token_id: str, actions: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Set, change or (with None) reset to the defaults a token's action policy: which actions its
+        agent may take, and how a person approves them. Pending action requests and open approval
+        windows for the token end."""
+        self._require_admin()
+        policy = _normalize_actions(actions)
+        self._req("PUT", f"/v1/admin/tokens/{token_id}/actions", json={"actions": policy})
+        return policy
 
     def set_token_approval(self, token_id: str, approval: dict[str, Any] | None) -> dict[str, Any] | None:
         """Set, change or (with None) remove a token's approval policy. Pending requests and
@@ -240,6 +316,20 @@ class SecurityWardenClient:
         """Pending approval requests (all tokens)."""
         self._require_admin()
         return self._req("GET", "/v1/admin/approvals").json()
+
+    def action_summary(self, request: dict[str, Any]) -> dict[str, Any] | None:
+        """The summary of a pending action request, decrypted here when its project keeps summaries
+        encrypted. None if there is none or it can't be decrypted."""
+        if request.get("summary"):
+            return request["summary"]
+        if not (request.get("summary_enc") and request.get("project_id")):
+            return None
+        try:
+            proj = next(p for p in self.list_projects() if p["id"] == request["project_id"])
+            return crypto.decrypt_action_summary(self._project_key(proj), proj["id"], request["id"],
+                                                 request["summary_enc"])
+        except (StopIteration, CryptoError, KeyError):
+            return None
 
     def decide_approval(self, approval_id: str, approve: bool) -> str:
         self._require_admin()
@@ -265,6 +355,24 @@ class SecurityWardenClient:
     def audit(self, limit: int = 100) -> list[dict[str, Any]]:
         self._require_admin()
         return self._req("GET", "/v1/admin/audit", params={"limit": limit}).json()
+
+
+def action_lines(action: str, summary: dict[str, Any] | None) -> str:
+    """A pending action as plain text lines, for terminals and dialogs."""
+    if not summary:
+        return f"{action} (no readable summary)"
+    head = f"{summary['title']} ({action})" + (f", {summary['count']} items" if summary.get("count", 1) > 1 else "")
+    lines = [head] + [f"{k}: {v}" for k, v in summary.get("fields", [])]
+    if summary.get("preview"):
+        lines.append(f"“{summary['preview']}”")
+    return "\n".join(lines)
+
+
+def _normalize_actions(actions: dict[str, Any] | None) -> dict[str, Any] | None:
+    try:
+        return normalize_action_policy(actions)
+    except ValueError as e:
+        raise SecurityWardenError(f"invalid action policy: {e}") from None
 
 
 def _normalize_ips(allowed_ips: list[str] | None) -> list[str] | None:

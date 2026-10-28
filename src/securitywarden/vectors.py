@@ -251,6 +251,57 @@ def build() -> dict[str, Any]:
     v["accounts"]["passwords_rules"] = [{"password": pw, "email": em, "ok": account.password_problem(pw, em) is None}
                                         for pw, em in pw_cases]
 
+    # action approval: digests, encrypted summaries, policies and rule decisions
+    digest_cases = [
+        ("gmail.send", {"to": ["bob@example.com"], "subject": "Invoice 1042", "body_sha256": "ab" * 32,
+                        "attachments": []}),
+        ("gmail.label", {"ids": ["18c2", "18c3"], "add": ["Done"], "remove": ["INBOX"]}),
+        ("webull.order.place", {"symbol": "AAPL", "qty": 3, "side": "buy", "limit": "189.50", "dry": False,
+                                "note": None, "unicode": "caf\u00e9 \u2713"}),
+        ("x.y", {}),
+    ]
+    rid = crypto.b64e(key("action/request")[:16])
+    with seeded("action"):
+        summary = approval.normalize_action_summary({
+            "title": "Send an email", "fields": [["To", "bob@example.com"], ["Subject", "Invoice 1042"]],
+            "preview": "Hi Bob, attached is the invoice \u2713", "count": 1})
+        sblob = crypto.encrypt_action_summary(pkey, pid, rid, summary)
+    v["actions"] = {
+        "digests": [{"action": a, "args": args, "digest": crypto.action_digest(a, args)} for a, args in digest_cases],
+        "summary": {"project_id": pid, "project_key_hex": pkey.hex(), "request_id": rid, "summary": summary,
+                    "blob": sblob},
+        "summary_must_fail": [
+            {"why": "another request id", "project_id": pid, "request_id": crypto.b64e(key("action/other")[:16]),
+             "blob": sblob},
+            {"why": "another project", "project_id": crypto.b64e(key("p2")[:16]), "request_id": rid, "blob": sblob},
+        ],
+    }
+    pol = {"channels": ["admin_ui", "push:telegram"], "timeout": 7200,
+           "rules": [{"match": "gmail.read.*", "mode": "allow"}, {"match": "gmail.label", "mode": "window", "window": 1800},
+                     {"match": "gmail.delete", "mode": "deny"}, {"match": "webull.*", "mode": "each"}]}
+    npol = approval.normalize_action_policy(pol)
+    decisions = []
+    for act, risk in (("gmail.read.search", "low"), ("gmail.read.message", "high"), ("gmail.label", "low"),
+                      ("gmail.label", "high"), ("gmail.delete", "high"), ("gmail.send", "high"), ("webull", "low"),
+                      ("webull.order.place", "medium"), ("gmail.readx.search", "low")):
+        mode, window = approval.action_decision(npol, act, risk) if approval.ACTION_RE.match(act) else (None, None)
+        decisions.append({"action": act, "risk": risk, "mode": mode, "window": window})
+    v["actions"]["policy"] = {"input": pol, "output": npol, "decisions": decisions,
+                              "describe": approval.describe_actions(npol),
+                              "describe_default": approval.describe_actions(None)}
+    bad_policies = [{"rules": [{"match": "Gmail.send", "mode": "each"}]}, {"rules": [{"match": "gmail.*.send", "mode": "each"}]},
+                    {"rules": [{"match": "gmail.send", "mode": "sometimes"}]}, {"rules": [{"match": "gmail.label", "mode": "window"}]},
+                    {"rules": [{"match": "gmail.label", "mode": "window", "window": 10}]},
+                    {"rules": [{"match": "gmail.send", "mode": "each", "window": 60}]}, {"timeout": 30},
+                    {"channels": []}, {"surprise": 1}, {"max_pending": 9, "max_per_hour": 3}]
+    for b in bad_policies:
+        try:
+            approval.normalize_action_policy(b)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted {b}")
+    v["actions"]["bad_policies"] = bad_policies
+
     # things that must fail to decrypt
     good = v["seal"][1]
     raw = bytearray(crypto.b64d(good["blob"][3:]))

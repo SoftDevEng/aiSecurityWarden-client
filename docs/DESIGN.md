@@ -50,6 +50,7 @@ admin key ──wrap──▶ project_key ◀──wrap── machine token key 
 | project key for a token | `sw1\|pkey\|<project_id>\|<token_id>` |
 | project key for the admin | `sw1\|pkey-admin\|<project_id>` |
 | secret blob | `sw1\|secret\|<project_id>\|<name_mac>` |
+| action summary | `sw1\|action\|<project_id>\|<request_id>` |
 
 The AAD stops a malicious server from substituting ciphertext across projects, tokens
 or secret names. Secret blobs contain `{"n": name, "v": value}`. The client also checks
@@ -254,6 +255,89 @@ does not echo it back, the client revokes the token.
   compromised server still cannot decrypt. Changes the wire format; bumps `sw1` / `v1.`.
 - Locking a token after N consecutive denials.
 
+## Action approval
+
+Human approval of the **secrets** stops a stolen token. It doesn't stop an AI agent that has its secrets
+from doing something it shouldn't: sending an email it was tricked into sending by another email
+(prompt injection), deleting the wrong messages, placing an order. Action approval puts a person in
+front of each **action** the agent's tools take. It is generic: the server knows actions by name,
+never what Gmail or any other application is.
+
+Honest limit: it protects against the agent, not against someone who controls the agent's machine
+(the application's own credentials have to be on that machine to call it).
+
+### Actions
+
+An action has a **name** (`<app>.<verb>[.<more>]`, lowercase letters, digits and `_`, 2 to 6 parts:
+`gmail.send`, `gmail.read.search`, `webull.order.place`), a **risk** declared by the connector (`low`,
+`medium`, `high`), a **summary** for the person deciding, and a **digest** of exactly what will be done:
+
+    digest = SHA-256( "sw1|action-digest|" ‖ canonical JSON {"action": name, "args": args} )
+
+Canonical JSON: keys sorted, no whitespace, UTF-8 (not `\u`-escaped), no floats. Large content (a body,
+an attachment) goes into `args` as its own SHA-256. An approval is bound to the digest: if the agent
+changes one recipient or one word after asking, it is a different action and needs a new approval.
+
+The **summary** is `{"title", "fields": [[label, value], ...], "preview"?, "count"}` (title ≤ 100
+characters, ≤ 10 fields, preview ≤ 500, `count` > 1 for a batch such as "archive 40 messages").
+The client always sends it encrypted under the project key
+(`HKDF(project_key, "securitywarden/v1/action-summary")`, AAD above) as `summary_enc`, which the web
+pages and `swctl` decrypt. It also sends it in plaintext as `summary` unless the project keeps summaries
+encrypted: then the server, the activity log and phone messages never see the content (phone messages
+say only "jarvis wants to: gmail.send — open SecurityWarden to review", without buttons).
+
+### Policy (per token, set by an admin; the agent can't change it)
+
+    {"channels": ["admin_ui", "push:telegram"], "timeout": 3600, "max_pending": 5, "max_per_hour": 60,
+     "rules": [{"match": "gmail.read.*", "mode": "allow"},
+               {"match": "gmail.label",  "mode": "window", "window": 1800},
+               {"match": "gmail.send",   "mode": "each"},
+               {"match": "*",            "mode": "each"}]}
+
+Rules are tried in order and the first match decides; nothing matched means `each`. `match` is an
+exact name, `prefix.*` (the prefix itself and everything under it) or `*`.
+
+| Mode | Meaning |
+|---|---|
+| `allow` | no person asked; still logged |
+| `each` | a person approves this one action |
+| `window` | a person approves once; the same action name is then allowed for `window` seconds (60 to 86400) |
+| `deny` | refused |
+
+A `high`-risk action is never `allow` or `window`: such rules are tightened to `each`. Risk only ever
+tightens; a rule is the most an agent can get. No policy (NULL) means: ask for every action, on the
+website (`admin_ui`), timeout 1 hour. Limits: `timeout` 60 s to 24 h (the agent checks back, it doesn't
+block), `max_pending` 1 to 50, `max_per_hour` 1 to 1000. Changing a token's action policy, revoking it
+or resetting its limits ends pending action requests and open windows.
+
+### Protocol (machine token)
+
+- `GET /v1/actions/config` → `{"project_id", "wrapped_key", "summaries": "plain" | "encrypted"}`: the
+  token-wrapped project key, so the client can encrypt summaries without fetching secrets.
+- `POST /v1/actions` with `{"id", "action", "risk", "digest", "nonce", "summary_enc", "summary"?}`
+  (`id` chosen by the client, so it can be in the summary's AAD; `nonce` 128 random bits):
+  - `200 {"status": "approved"}`: allowed (by `allow`, or an open window). Already used: do it now.
+  - `202 {"status": "pending", "request_id", "match", "expires_in", "check_after"}`: a person has been
+    asked, by the token's action-policy channels, with the match code.
+  - `403 action_denied`: the policy says `deny`. `429`: limits.
+- `POST /v1/actions/{id}` with `{"nonce", "digest"}` (same token and client address as the request):
+  `202` still pending; `200 {"status": "approved"}` once, when approved (it is used up by this call);
+  `403 approval_denied | approval_expired | approval_cancelled | approval_used | approval_mismatch |
+  action_mismatch` otherwise.
+
+Pending action requests use the same machinery as session and fetch approvals: match codes, one-time
+capabilities in the Telegram / ntfy buttons (per project approval setup), the Approvals pages, the
+prompts that update to "Approved in Telegram.", per-owner tenancy and the activity log (action name,
+risk, decision and channel; the summary only when the project allows plaintext summaries).
+
+### The agent's side
+
+The MCP framework (`securitywarden.mcp`) does this for every connector: before a tool marked as an
+action runs, it computes the digest and summary and asks. Pending: the tool returns
+`{"status": "waiting_for_approval", "request_id", "match", "check_after"}` to the AI at once; the AI
+calls `check_approval(request_id)` later, which performs the stored action, with exactly the stored
+arguments, once it is approved.
+
 ## Web front end
 
 `web/` is a Svelte 5 + TypeScript single-page app, built by Vite into
@@ -378,11 +462,12 @@ allows the second-factor step, without changing anything else.
 
 | Table | Contents |
 |---|---|
-| `projects` | id, owner (account id, or empty for the operator), name, project key wrapped under the owner's key, the project's Telegram/ntfy settings (readable by the server, like the server-wide ones) |
-| `credentials` | id, kind, label, Argon2id(secret), project, owner, token-wrapped project key, expiry, revoked, last used/IP, allowed client addresses, approval policy, approval-limit reset time |
+| `projects` | id, owner (account id, or empty for the operator), name, project key wrapped under the owner's key, the project's Telegram/ntfy settings (readable by the server, like the server-wide ones), whether action summaries stay encrypted |
+| `credentials` | id, kind, label, Argon2id(secret), project, owner, token-wrapped project key, expiry, revoked, last used/IP, allowed client addresses, approval policy, action policy, approval-limit reset time |
 | `users` | id, email, status, KDF parameters, salt, Argon2id(sign-in key), Argon2id(recovery proof), account key wrapped under the password-derived key and under the recovery key, dates, last sign-in IP, push allowed |
 | `sessions` | SHA-256(session token), account, kind (session or recovery ticket), stage, created, last seen, expiry, IP |
-| `approvals` | id, token, kind, client address, SHA-256(nonce), match code, times, status, decided via |
+| `approvals` | id, token, kind (`auth`, `fetch`, `action`), client address, SHA-256(nonce), match code, times, status, decided via; for actions also the name, risk, digest, encrypted summary and (only if the project allows) the plaintext summary |
+| `action_windows` | token, action name, until: open "approve similar for N minutes" windows |
 | `approval_caps` | SHA-256(capability), approval, channel |
 | `approval_messages` | Telegram message id and the prompt text sent, so it can be updated when settled |
 | `secrets` | project, HMAC(name), AES-GCM blob |

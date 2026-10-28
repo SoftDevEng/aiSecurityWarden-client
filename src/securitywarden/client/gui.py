@@ -25,7 +25,7 @@ import httpx
 from .. import __version__, crypto
 from ..approval import CHANNELS, DEFAULTS, describe, normalize_policy
 from ..crypto import CryptoError
-from .api import SecurityWardenClient, SecurityWardenError
+from .api import SecurityWardenClient, SecurityWardenError, action_lines
 from .cli import ENV_NAME_RE
 
 try:  # Tk is optional on some Linux installs (python3-tk)
@@ -39,6 +39,13 @@ IDLE_LOCK_SECONDS = 15 * 60
 CLIPBOARD_CLEAR_SECONDS = 60
 APPROVAL_POLL_SECONDS = 4
 PAD = 8
+
+def _what(a: dict[str, Any]) -> str:
+    if a["kind"] == "action":
+        summary = a.get("summary")
+        return f"{summary['title']} ({a['action']})" if summary else f"{a['action']} (see details)"
+    return "start a session" if a["kind"] == "auth" else "read secrets"
+
 
 APPROVAL_MODES = {"No approval": None, "Once per session": "session", "Every fetch": "every_fetch"}
 CHANNEL_LABELS = {"admin_ui": "This admin window", "push:ntfy": "ntfy push", "push:telegram": "Telegram"}
@@ -438,7 +445,7 @@ class AdminApp:
         self.approval_tree.delete(*self.approval_tree.get_children())
         for a in rows:
             self.approval_tree.insert("", "end", iid=a["id"], tags=() if a["decidable"] else ("off",), values=(
-                a["token_name"], a["match"], "start a session" if a["kind"] == "auth" else "read secrets",
+                a["token_name"], a["match"], _what(a),
                 a["ip"], f"{max(0, a['expires_at'] - int(time.time()))} s",
                 "here" if a["decidable"] else ", ".join(CHANNEL_LABELS.get(c, c) for c in a["channels"])))
         for iid in keep:
@@ -653,8 +660,11 @@ class AdminApp:
             messagebox.showinfo("SecurityWarden", "This token's policy does not allow approval from this window.",
                                 parent=self.root)
             return
+        what = ""
+        if a["kind"] == "action":
+            what = action_lines(a["action"], self.client.action_summary(a)) + "\n\n"
         if approve and not self.confirm(
-                "Approve request", f"Approve “{a['token_name']}” from {a['ip']}?\n\n"
+                "Approve request", f"Approve “{a['token_name']}” from {a['ip']}?\n\n{what}"
                 f"Only approve if the machine shows match code {a['match']} and you expected this request."):
             return
         self.decide(aid, approve)
