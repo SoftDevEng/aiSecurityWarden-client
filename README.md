@@ -1,0 +1,189 @@
+# SecurityWarden client
+
+The open-source client for **SecurityWarden**, a secrets service with **scoped, revocable machine tokens**
+and **end-to-end encryption**. Built so AI agents (like [Hermes Agent](https://hermes-agent.nousresearch.com))
+and other unattended services can fetch API keys at startup without ever storing those keys on disk.
+
+All encryption and decryption happens here, in the client. The server only ever receives ciphertext,
+proofs it keeps only as Argon2id hashes, and wrapped keys, so you can check what leaves your machine by
+reading this code.
+
+This repository contains:
+
+- the Python client library (`securitywarden.client.SecurityWardenClient`);
+- `swctl`, the command-line tool (machines: `swctl export` / `swctl run`; admins: `swctl admin ...`);
+- `swadmin`, a small desktop admin window;
+- the cryptography (`src/securitywarden/crypto.py`), the approval-policy and address-list parsers, and the
+  shared test vectors other implementations are checked against;
+- the protocol and design document: [docs/DESIGN.md](docs/DESIGN.md).
+
+The SecurityWarden server is a separate product.
+
+> **Status: alpha.** The design is deliberately small and reviewable, but it has not had an independent
+> security audit. Read the [threat model](#threat-model).
+
+## How it works
+
+```
+ Admin workstation                 SecurityWarden server                Agent box (e.g. jarvis)
+ ─────────────────                 ─────────────────────                ───────────────────────
+ swctl admin ...                   stores only:                         sw1.m.<id>.<secret>:<key>
+  • creates project key  ───────▶   • ciphertext                        (chmod 600 file)
+  • encrypts secrets                • Argon2 hashes                            │
+  • wraps project key               • wrapped keys          ◀── id+secret ─────┤  1. auth → 5-min JWT
+    per machine token               • audit log             ─── ciphertext ──▶ │  2. fetch
+                                                                               │  3. decrypt locally with <key>
+                                                                               ▼
+                                                                    KEY=VALUE → agent env → tools
+```
+
+A machine token has three parts:
+
+| Part     | Sent to server? | Purpose |
+|----------|-----------------|---------|
+| `id`     | yes             | identifies the token |
+| `secret` | yes (over TLS)  | proves possession; server keeps only an Argon2id hash |
+| `key`    | **never**       | unwraps the project key, which decrypts the secrets |
+
+So the server can authenticate a token and hand out ciphertext, but it **cannot
+read any secret**. A full copy of the server's database is useless without a token key.
+
+## Threat model
+
+**Protects against**
+- Secrets at rest on agent machines: only a token sits on disk, not your API keys.
+  Backups, copied dotfiles and logs leak a token you can revoke in one command.
+- Server compromise: the database holds only AES-256-GCM ciphertext, Argon2 hashes and
+  wrapped keys. Ciphertext is bound to its project, token and name (AAD), so a
+  malicious server can't swap blobs around either.
+- Over-broad access: each token is read-only and scoped to one project.
+- Stale credentials: tokens can expire; revocation takes effect on the next request
+  (access JWTs are re-checked against the database every time).
+- Brute force: Argon2id hashing, per-IP and per-token failure rate limiting, and the
+  same timing for unknown token ids.
+
+**Does not protect against**
+- An attacker who already controls the agent machine while it's running. They can read the
+  token file, or read the decrypted secrets from the process memory or environment.
+  No secrets manager can prevent that.
+- Losing the admin credential. Project keys are wrapped under it; without it the
+  secrets can't be recovered (by design). Keep it in your password manager.
+- A server operator who swaps in malicious *client* code. Install `swctl` from a source you trust.
+
+## Install
+
+```bash
+pip install securitywarden        # once published; for now from this repository:
+pip install git+https://github.com/SoftDevEng/SecurityWarden-client
+```
+
+Needs Python 3.10+. `swadmin` also needs Tkinter (ships with Python on Windows and macOS;
+`sudo apt install python3-tk` on Debian/Ubuntu).
+
+From source:
+
+```bash
+git clone https://github.com/SoftDevEng/SecurityWarden-client && cd SecurityWarden-client
+pip install -e ".[dev]" && pytest
+```
+
+## Quick start
+
+You need the address of a SecurityWarden server and, to administer it, its admin credential.
+
+### 1. Admin (from your workstation)
+
+```bash
+mkdir -p ~/.config/securitywarden
+echo 'sw1.a....' > ~/.config/securitywarden/admin.cred && chmod 600 ~/.config/securitywarden/admin.cred
+export SW_SERVER_URL=https://vault.example.com
+
+swctl admin project create hermes-webull
+swctl admin secret set hermes-webull WEBULL_APP_KEY       # prompts; value never in argv/history
+swctl admin secret set hermes-webull WEBULL_APP_SECRET
+swctl admin token create hermes-webull --name jarvis --expires-days 180
+```
+
+### 2. Machine
+
+```bash
+umask 077 && echo 'sw1.m....' > ~/.config/securitywarden/token
+export SW_SERVER_URL=https://vault.example.com SW_ACCESS_TOKEN_FILE=~/.config/securitywarden/token
+
+swctl export                      # KEY=VALUE lines
+swctl export --format json
+swctl run -- python my_bot.py     # run a command with secrets in its environment
+```
+
+### Hermes Agent integration
+
+Hermes supports custom vaults through a **command helper** that prints `KEY=VALUE`
+lines at launch. That's exactly what `swctl export` does. See
+[examples/hermes/](examples/hermes/) for a wrapper script and config.
+
+## Admin commands
+
+| Command | |
+|---|---|
+| `swctl admin project create|list|delete NAME` | manage projects |
+| `swctl admin secret set|get|delete PROJECT NAME` | values read from a prompt or stdin |
+| `swctl admin secret list PROJECT` | names only |
+| `swctl admin token create PROJECT --name N [--expires-days D] [--allow-ip ADDR]...` | prints the token once; `--allow-ip` (address or CIDR, repeatable) pins where it may connect from |
+| `swctl admin token set-ips ID --allow-ip ADDR... \| --any` | replace or remove a token's allowed addresses |
+| `swctl admin token list [PROJECT]` | status, expiry, last used, last IP, allowed addresses, approval |
+| `swctl admin token create ... --approval session\|every_fetch [--session-ttl 8h] [--channel C]...` | require a person to approve the token's use (see below) |
+| `swctl admin token set-approval ID --approval none\|session\|every_fetch [...]` | change or remove it; ends pending requests and approved sessions |
+| `swctl admin token reset-approval-limits ID` | let a token that hit its hourly limit ask again now (also in swadmin: **Reset approval limit…**) |
+| `swctl admin approvals list` / `approve ID [--match NN]` / `deny ID` | decide pending requests |
+| `swctl admin token revoke ID` | immediate |
+| `swctl admin audit [--limit N]` | auth, fetch and admin events |
+
+### Human approval
+
+A machine token can require a person to approve it before it gets any secrets: once per
+session (`--approval session`, the session lasts `--session-ttl`, default 8 h) or for
+every fetch (`--approval every_fetch`). Requests go to the channels you choose:
+
+- `admin_ui`: the Approvals tab in `swadmin` (or `swctl admin approvals`);
+- `push:telegram` and `push:ntfy`: a phone notification with Approve / Deny buttons.
+  These work behind an IIS/firewall allowlist, because the server polls Telegram / ntfy
+  for the answer instead of the phone calling in. They are set up on the server, per project
+  (the project's **Approval setup** tab in the web admin).
+
+```bash
+swctl admin token set-approval <token-id> --approval session --session-ttl 8h \
+      --channel admin_ui --channel push:telegram
+```
+
+The machine prints a two-digit **match code** while it waits (`swctl: waiting for a person
+to approve this session (match code 47, up to 120 s)...`); approve only if the prompt shows
+the same code. An approval works once, only for the process and address that asked, and
+ends when the token is revoked or its policy changes. Details: [docs/DESIGN.md](docs/DESIGN.md#human-approval).
+
+### Admin window (`swadmin`)
+
+If you would rather not use a terminal, `swadmin` opens a small desktop window that does
+the same things as `swctl admin`: projects, secrets, tokens (create, revoke, allowed
+addresses, approval policy), pending approval requests and the activity log. The Approvals
+tab checks for new requests every few seconds while you are signed in. It is installed with the client and needs only Tkinter,
+which ships with Python on Windows and macOS (`sudo apt install python3-tk` on Debian/Ubuntu).
+
+- The admin credential and secret values are pasted into the window and held in memory
+  only: nothing reaches argv, the environment or shell history. Only the server address is
+  remembered between runs.
+- Encryption still happens on your machine, in the same code `swctl` uses.
+- New tokens and revealed values are shown once with a Copy button; the clipboard is
+  cleared after a minute. The window signs out after 15 minutes without input.
+
+## Cryptography
+
+All of it lives in [`src/securitywarden/crypto.py`](src/securitywarden/crypto.py): AES-256-GCM (random
+96-bit nonces) with associated data binding every ciphertext to its context, HKDF-SHA256 for key separation,
+HMAC-SHA256 for secret-name lookup ids (names are encrypted too) and PBKDF2-SHA256 for account passwords,
+all from the `cryptography` library. There's no custom crypto. The server stores Argon2id hashes of the
+proofs clients send. Test vectors: [`tests/vectors/crypto-v1.json`](tests/vectors/crypto-v1.json)
+(regenerate with `python -m securitywarden.vectors`). Full design: [docs/DESIGN.md](docs/DESIGN.md).
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE). Security reports: see [SECURITY.md](SECURITY.md).

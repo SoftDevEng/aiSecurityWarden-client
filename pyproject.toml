@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "securitywarden"
+dynamic = ["version"]
+description = "Client for SecurityWarden: scoped, revocable machine tokens and end-to-end encrypted secrets for AI agents like Hermes."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "SoftDevEng" }]
+keywords = ["secrets", "vault", "secrets-manager", "hermes-agent", "machine-tokens", "end-to-end-encryption"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Topic :: Security :: Cryptography",
+]
+dependencies = [
+  "cryptography>=42",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+swctl = "securitywarden.client.cli:main"
+
+[project.gui-scripts]
+swadmin = "securitywarden.client.gui:main"
+
+[project.urls]
+Homepage = "https://github.com/SoftDevEng/SecurityWarden-client"
+Issues = "https://github.com/SoftDevEng/SecurityWarden-client/issues"
+
+[tool.hatch.version]
+path = "src/securitywarden/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/securitywarden"]
