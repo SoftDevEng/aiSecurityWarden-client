@@ -43,7 +43,8 @@ PAD = 8
 def _what(a: dict[str, Any]) -> str:
     if a["kind"] == "action":
         summary = a.get("summary")
-        return f"{summary['title']} ({a['action']})" if summary else f"{a['action']} (see details)"
+        title = summary.get("title") if isinstance(summary, dict) else None
+        return f"{title} ({a['action']})" if isinstance(title, str) else f"{a['action']} (details unavailable)"
     return "start a session" if a["kind"] == "auth" else "read secrets"
 
 
@@ -440,6 +441,17 @@ class AdminApp:
             ok, rows = self._call(self.client.list_approvals)
             if not ok:
                 return False
+        # encrypted summaries are decrypted here, once per request
+        cache = getattr(self, "_summaries", {})
+        self._summaries = {}
+        for a in rows:
+            if a["kind"] == "action" and not a.get("summary") and a.get("summary_enc"):
+                if a["id"] not in cache:
+                    try:
+                        cache[a["id"]] = self.client.action_summary(a)
+                    except (SecurityWardenError, CryptoError, httpx.HTTPError):
+                        continue        # try again on the next refresh
+                self._summaries[a["id"]] = a["summary"] = cache[a["id"]]
         self.approvals = rows
         keep = self.approval_tree.selection()
         self.approval_tree.delete(*self.approval_tree.get_children())

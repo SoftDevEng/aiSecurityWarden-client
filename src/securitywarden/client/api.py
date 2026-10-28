@@ -326,9 +326,10 @@ class SecurityWardenClient:
             return None
         try:
             proj = next(p for p in self.list_projects() if p["id"] == request["project_id"])
-            return crypto.decrypt_action_summary(self._project_key(proj), proj["id"], request["id"],
-                                                 request["summary_enc"])
-        except (StopIteration, CryptoError, KeyError):
+            # written by the agent's side: show it only if it has the expected shape
+            return normalize_action_summary(crypto.decrypt_action_summary(
+                self._project_key(proj), proj["id"], request["id"], request["summary_enc"]))
+        except (StopIteration, CryptoError, KeyError, ValueError):
             return None
 
     def decide_approval(self, approval_id: str, approve: bool) -> str:
