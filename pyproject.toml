@@ -30,6 +30,7 @@ dev = ["pytest>=8"]
 
 [project.scripts]
 swctl = "securitywarden.client.cli:main"
+sw-mcp = "securitywarden.mcp.cli:main"
 
 [project.gui-scripts]
 swadmin = "securitywarden.client.gui:main"

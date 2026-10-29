@@ -121,6 +121,19 @@ Hermes supports custom vaults through a **command helper** that prints `KEY=VALU
 lines at launch. That's exactly what `swctl export` does. See
 [examples/hermes/](examples/hermes/) for a wrapper script and config.
 
+### AI agent tools with approval (`sw-mcp`)
+
+`sw-mcp` gives an agent tools for an application, such as Gmail, as an MCP server. Every action goes through
+the token's rules in SecurityWarden: reading may be allowed outright, while sending an email waits until you
+approve exactly that email (on the website, in swadmin, Telegram or ntfy). The agent is told it's waiting and
+checks back. See [docs/mcp-gmail.md](docs/mcp-gmail.md) for the Gmail set-up with Hermes, and
+[DESIGN.md](docs/DESIGN.md#mcp-connectors) for writing a connector for another application.
+
+```bash
+sw-mcp tools --connector gmail          # the tools, their actions, risks and suggested rules
+sw-mcp serve --connector gmail          # what Hermes runs (stdio)
+```
+
 ## Admin commands
 
 | Command | |

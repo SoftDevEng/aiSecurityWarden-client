@@ -404,3 +404,13 @@ def decrypt_action_summary(project_key: bytes, project_id: str, request_id: str,
     if not isinstance(data, dict):
         raise CryptoError("action summary is not an object")
     return data
+
+
+# ---------------------------------------------------------------------------
+# OAuth sign-in for connectors (RFC 7636 PKCE)
+# ---------------------------------------------------------------------------
+
+def pkce_pair() -> tuple[str, str]:
+    """(code_verifier, code_challenge) for an OAuth sign-in with PKCE, method S256."""
+    verifier = b64e(os.urandom(32))
+    return verifier, b64e(hashlib.sha256(verifier.encode("ascii")).digest())

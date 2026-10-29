@@ -338,6 +338,57 @@ action runs, it computes the digest and summary and asks. Pending: the tool retu
 calls `check_approval(request_id)` later, which performs the stored action, with exactly the stored
 arguments, once it is approved.
 
+## MCP connectors
+
+`sw-mcp serve` is a Model Context Protocol server (stdio, JSON-RPC 2.0, one message per line; written on the
+standard library rather than the MCP SDK so the client keeps two dependencies). It serves the tools of the
+enabled connectors plus `check_approval`. A connector is one class per application:
+
+- `name` (the action prefix), `secrets` (names it reads from the token's project), `suggested_rules`;
+- tools declared with `@tool(description, action=..., risk=..., params=..., required=...)`. A tool doesn't do
+  anything: it **prepares** a `Plan(args, summary, run)`. `args` (JSON values, no floats) decides everything
+  `run` does; `run(args)` gets nothing else. Preparing may look things up (e.g. the sender of the email being
+  replied to) so that `args` and the summary are complete; nothing it reads goes back to the AI.
+
+For each call the framework:
+
+1. checks the arguments against the tool's schema;
+2. prepares the plan and computes `action_digest(action, args)`;
+3. if the same action with the same digest is already waiting, checks that request instead of asking again;
+4. asks the server (`POST /v1/actions`): allowed → `run(args)` now; pending → stores the plan in memory and
+   answers `waiting_for_approval` (it names only the action, never the summary, which may hold outside text);
+   denied or refused → says so, nothing runs;
+5. `check_approval(request_id)` → `POST /v1/actions/{id}`; approved → `run` with a copy of the stored
+   `args`, once. A plan lives only in this process (lost on restart: the AI simply asks again).
+
+Results are text. Anything that came from outside (an email, a web page) is returned as `untrusted(...)`,
+which the framework renders inside `<untrusted-content boundary="<random>">` with a note that it is data,
+not instructions; the random boundary can't be closed from inside the content. Logs (stderr) carry tool
+names, action names and request ids, never arguments or content. Secrets are fetched with the machine token
+when first needed and kept in memory; they never appear in results or logs.
+
+Rules are in SecurityWarden, so a compromised or confused agent can't loosen them; the connector's declared
+risk can only tighten them (high-risk actions always ask). The honest limit stays: whoever controls the
+agent's machine holds the token and the application's credentials.
+
+### Gmail (`securitywarden.mcp.gmail`)
+
+OAuth only (a Google Cloud "Desktop app" client; scope `gmail.modify`). Secrets: `GMAIL_CLIENT_ID`,
+`GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`. `sw-mcp login gmail` runs Google's sign-in once (loopback
+redirect on 127.0.0.1, PKCE S256, a random state) and stores the refresh token in the project with the admin
+credential (`--project`) or shows it once to paste into the website.
+
+| Tool | Action | Risk | Suggested rule |
+|---|---|---|---|
+| `gmail_search`, `gmail_read`, `gmail_read_thread`, `gmail_labels` | `gmail.read.*` | low | allow |
+| `gmail_label`, `gmail_archive`, `gmail_mark_read` | `gmail.label`, `.archive`, `.mark_read` | low | window 30 min |
+| `gmail_draft` | `gmail.draft` | medium | each |
+| `gmail_send`, `gmail_reply`, `gmail_forward`, `gmail_trash` | `gmail.send`, `.reply`, `.forward`, `.trash` | high | each (always) |
+
+Sending digests the full recipients, subject and body; a reply also the thread and the headers it answers;
+a forward the original message id (Gmail messages don't change). Addresses and subjects are checked
+(no line breaks: no header injection), at most 50 recipients and 100 messages per batch.
+
 ## Web front end
 
 `web/` is a Svelte 5 + TypeScript single-page app, built by Vite into
@@ -481,5 +532,7 @@ Project names, token labels and account emails are plaintext metadata. Pick name
 - One admin credential per database. Admin key rotation (re-wrap all project keys) is planned.
 - The rate limiter is per process. Behind several workers, use one worker or a front-end limiter.
 - No secret versioning or history yet.
+- MCP connectors: Gmail first; the Webull trading server is next on the framework. Plans waiting for approval
+  live in the MCP server's memory only.
 - Possible future additions: a native Hermes secret-source plugin (`ctx.register_secret_source()`),
   multi-user accounts for the web front end, and Postgres support.
