@@ -305,3 +305,23 @@ def test_sw_mcp_tools_and_config(tmp_path, capsys, monkeypatch):
     monkeypatch.delenv("SW_MCP_CONNECTORS", raising=False)
     cli.main(["tools", "--config", str(cfg)])
     assert "gmail_read" in capsys.readouterr().out
+
+
+def test_sw_mcp_call_waits_for_approval(monkeypatch, capsys):
+    from securitywarden.mcp import cli
+    server = FakeServer({"notes.read.note": "allow"})
+    monkeypatch.setattr(cli, "_client", lambda args, cfg: server)
+    monkeypatch.setattr("time.sleep", lambda s: [server.decide(r, True) for r, v in server.requests.items()
+                                                 if v["state"] == "pending"])
+    cli.main(["call", "notes_read", "id=n1", "--connector", "test_mcp:Notes"])
+    assert "Buy milk" in capsys.readouterr().out
+    cli.main(["call", "notes_delete", "ids=n1, n2", "why=line one\\nline two", "--connector", "test_mcp:Notes"])
+    out = capsys.readouterr()
+    assert json.loads(out.out) == {"deleted": ["n1", "n2"]} and "match code 42" in out.err
+    for bad in (["notes_read", "nope=1"], ["notes_tag", "id=n1", "times=x"], ["notes_nope"]):
+        with pytest.raises(SystemExit):
+            cli.main(["call", *bad, "--connector", "test_mcp:Notes"])
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    with pytest.raises(SystemExit):
+        cli.main(["call", "notes_delete", "ids=n3", "--wait", "0", "--connector", "test_mcp:Notes"])
+    assert "nothing was done" in capsys.readouterr().err

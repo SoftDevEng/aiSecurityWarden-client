@@ -54,7 +54,14 @@ $env:SW_SERVER_URL="https://vault.example.com"; $env:SW_ACCESS_TOKEN_FILE="$env:
 the project's **Secrets** as `GMAIL_REFRESH_TOKEN`, then clear the terminal. (With the admin credential on this
 machine, `sw-mcp login gmail --project mail` stores it directly instead.)
 
-Check: `sw-mcp tools --connector gmail` lists the tools.
+Check: `sw-mcp tools --connector gmail` lists the tools. Try one by hand before involving the agent:
+
+```bash
+sw-mcp call gmail_search query=is:unread limit=3 --connector gmail
+sw-mcp call gmail_send to=you@example.com subject=Test "body=Hello\nfrom SecurityWarden" --connector gmail
+```
+
+`sw-mcp call` waits (up to 15 minutes) while an action needs your approval, then prints the result.
 
 ## 4. Hermes
 

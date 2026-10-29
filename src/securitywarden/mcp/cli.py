@@ -4,6 +4,7 @@
     sw-mcp serve --config ~/.config/sw/mcp.json
     sw-mcp tools [--connector gmail]                # what the agent will see, with actions and risks
     sw-mcp login gmail                              # one-time Google sign-in for the Gmail connector
+    sw-mcp call gmail_search query=is:unread limit=5    # try one tool by hand (waits for approval)
 
 Config file (JSON; every key optional, environment variables and options win):
     {"server": "https://vault.example.com", "token_file": "~/.config/sw/jarvis.token",
@@ -115,6 +116,56 @@ def cmd_tools(args: argparse.Namespace) -> None:
     print("  check_approval     (built in: check on, and then do, an action waiting for approval)")
 
 
+def _parse_call_args(hub: Hub, tool_name: str, pairs: list[str]) -> dict[str, Any]:
+    """name=value pairs typed on the command line, converted using the tool's schema (lists: commas)."""
+    schema = next((t["inputSchema"] for t in hub.list_tools() if t["name"] == tool_name), None)
+    if schema is None:
+        _die(f"unknown tool {tool_name} (see: sw-mcp tools)")
+    out: dict[str, Any] = {}
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        if not sep or key not in schema["properties"]:
+            _die(f"expected NAME=VALUE with NAME one of: {', '.join(schema['properties'])}")
+        kind = schema["properties"][key].get("type")
+        if kind == "array":
+            out[key] = [v.strip() for v in value.split(",") if v.strip()]
+        elif kind == "integer":
+            try:
+                out[key] = int(value)
+            except ValueError:
+                _die(f"{key} must be a whole number")
+        elif kind == "boolean":
+            if value.lower() not in ("true", "false", "yes", "no", "1", "0"):
+                _die(f"{key} must be true or false")
+            out[key] = value.lower() in ("true", "yes", "1")
+        else:
+            out[key] = value.replace("\\n", "\n")
+    return out
+
+
+def cmd_call(args: argparse.Namespace) -> None:
+    """Run one tool as an agent would, and wait for a person's approval if it needs one."""
+    import time
+    cfg = _config(args)
+    hub = Hub(_client(args, cfg), _connectors(args, cfg))
+    try:
+        res = hub.call(args.tool, _parse_call_args(hub, args.tool, args.values))
+        deadline = time.monotonic() + args.wait
+        while res.data.get("status") == "waiting_for_approval":
+            rid = res.data["request_id"]
+            if time.monotonic() > deadline:
+                _die(f"still waiting for approval after {args.wait} s (request {rid}); nothing was done")
+            print(f"sw-mcp: waiting for approval of {res.data['action']} (match code {res.data.get('match')})...",
+                  file=sys.stderr, flush=True)
+            time.sleep(min(10, max(2, int(res.data.get("check_after") or 5))))
+            res = hub.call(hub.CHECK_TOOL, {"request_id": rid})
+        print(res.text)
+        if res.is_error:
+            raise SystemExit(1)
+    finally:
+        hub.close()
+
+
 def cmd_login(args: argparse.Namespace) -> None:
     cls = load_connector(args.connector_name)
     login = getattr(cls, "login", None)
@@ -142,6 +193,12 @@ def main(argv: list[str] | None = None) -> None:
     t = sub.add_parser("tools", help="list the tools, their actions and risks")
     common(t)
     t.set_defaults(fn=cmd_tools)
+    c = sub.add_parser("call", help="run one tool by hand, waiting for approval if needed (for testing)")
+    c.add_argument("tool", help="tool name, e.g. gmail_search (see: sw-mcp tools)")
+    c.add_argument("values", nargs="*", help="arguments as NAME=VALUE; lists separated by commas; \\n for a new line")
+    c.add_argument("--wait", type=int, default=900, help="seconds to wait for an approval (default 900)")
+    common(c)
+    c.set_defaults(fn=cmd_call)
     lg = sub.add_parser("login", help="one-time sign-in for a connector (e.g. gmail)")
     lg.add_argument("connector_name")
     common(lg, connectors=False)

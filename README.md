@@ -132,6 +132,7 @@ checks back. See [docs/mcp-gmail.md](docs/mcp-gmail.md) for the Gmail set-up wit
 ```bash
 sw-mcp tools --connector gmail          # the tools, their actions, risks and suggested rules
 sw-mcp serve --connector gmail          # what Hermes runs (stdio)
+sw-mcp call gmail_search query=is:unread limit=5   # try one tool by hand; waits for approval if needed
 ```
 
 ## Admin commands
