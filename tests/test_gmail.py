@@ -247,7 +247,7 @@ def test_login_uses_pkce_and_state_and_shows_the_token_once(monkeypatch, capsys)
     monkeypatch.setattr(gmail.webbrowser, "open", browser)
     monkeypatch.setattr(gmail.httpx, "post", post)
     monkeypatch.setattr(gmail.httpx, "get", lambda *a, **k: httpx.Response(200, json={"emailAddress": "me@example.com"}))
-    monkeypatch.setattr("builtins.input", lambda prompt: "cid")
+    monkeypatch.setattr("builtins.input", lambda: "cid")
     monkeypatch.setattr(gmail.getpass, "getpass", lambda prompt: "csecret")
     for k in ("SW_ACCESS_TOKEN_FILE", "SW_ACCESS_TOKEN"):
         monkeypatch.delenv(k, raising=False)

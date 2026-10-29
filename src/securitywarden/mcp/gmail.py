@@ -540,7 +540,8 @@ def _oauth_client(args: Any) -> tuple[str, str]:
                 return s["GMAIL_CLIENT_ID"], s["GMAIL_CLIENT_SECRET"]
         except Exception as e:  # noqa: BLE001
             print(f"sw-mcp: couldn't read them from SecurityWarden ({e}); asking instead.", file=sys.stderr)
-    cid = input("Google OAuth client ID: ").strip()
+    print("Google OAuth client ID: ", end="", file=sys.stderr, flush=True)   # stdout carries only the token
+    cid = input().strip()
     secret = getpass.getpass("Google OAuth client secret (not shown): ").strip()
     if not cid or not secret:
         raise SystemExit("sw-mcp: both are needed")
