@@ -52,6 +52,8 @@ admin key ──wrap──▶ project_key ◀──wrap── machine token key 
 | secret blob | `sw1\|secret\|<project_id>\|<name_mac>` |
 | action summary | `sw1\|action\|<project_id>\|<request_id>` |
 | machine token under a setup code | `sw1\|setup\|<setup_id>` |
+| connector key for the operator / an account / a project | `sw1\|ckey-admin\|<cid>`, `sw1\|ckey-user\|<user_id>\|<cid>`, `sw1\|ckey-project\|<project_id>\|<cid>` |
+| a connector version's code / description | `sw1\|connector-bundle\|<cid>\|<version>`, `sw1\|connector-meta\|<cid>\|<version>` |
 
 The AAD stops a malicious server from substituting ciphertext across projects, tokens
 or secret names. Secret blobs contain `{"n": name, "v": value}`. The client also checks
@@ -391,7 +393,8 @@ Rules are in SecurityWarden, so a compromised or confused agent can't loosen the
 risk can only tighten them (high-risk actions always ask). The honest limit stays: whoever controls the
 agent's machine holds the token and the application's credentials.
 
-**Finding connectors.** By name from the entry-point group `securitywarden.connectors` (installed packages
+**Finding connectors.** The ones turned on for the token's project in SecurityWarden (see "Connector
+distribution"), plus any named in the MCP settings: by name from the entry-point group `securitywarden.connectors` (installed packages
 declare `name = "module:Class"`; Gmail is registered the same way), or directly as `module:Class`. A connector's
 actions must start with its `name`. `sw-mcp check` lints connectors (names, schemas against method signatures, no
 floats, suggested rules); `securitywarden.mcp.testing` gives connector tests a fake SecurityWarden; the guide for
@@ -414,6 +417,67 @@ credential (`--project`) or shows it once to paste into the website.
 Sending digests the full recipients, subject and body; a reply also the thread and the headers it answers;
 a forward the original message id (Gmail messages don't change). Addresses and subjects are checked
 (no line breaks: no header injection), at most 50 recipients and 100 messages per batch.
+
+## Connector distribution
+
+Connectors can be turned on per project on the website instead of being installed on each machine. `sw-mcp`
+then loads whatever the token's project uses, so an agent's MCP settings need no `--connector` at all.
+
+**Built-in connectors** (`securitywarden/mcp/catalog.py`: Gmail today) ship with the client. The server lists
+them from the client package it runs with; turning one on for a project stores `builtin:<name>`. Machines whose
+client doesn't have that connector yet log "update the SecurityWarden client" and carry on. They never count
+against an account's limits.
+
+**Custom connectors** are stored by the server, encrypted, account-wide (one upload serves every project of the
+account), latest version only.
+
+- *Bundle.* `sw-mcp pack NAME` writes `NAME.swconnector`: canonical JSON `{"format": "sw-connector-1", name,
+  title, description, entry: "package.module:Class", files: {path: text}, tools, secrets, suggested_rules}`.
+  Only `.py`, `.json`, `.txt` and `.md` files under plain package folders; the code may use the standard library
+  and what the client installs (httpx, cryptography). A bundle may not provide `securitywarden`, its
+  dependencies, `site`/`sitecustomize` or any standard-library name. `pack` refuses connectors that fail
+  `sw-mcp check`.
+- *Keys.* Each connector has its own random 256-bit key, wrapped for its owner (admin key:
+  `seal(admin wrap key, ...)`; account: `HKDF(account key, "securitywarden/v1/account-ckey")`) and, for each
+  project that uses it, under `HKDF(project key, "securitywarden/v1/project-ckey")`. A project's machines can
+  only read the connectors turned on for that project.
+- *Versions.* Each upload is sealed under `HKDF(ckey, "securitywarden/v1/connector-bundle")` (the code) and
+  `"…/connector-meta"` (name, title, size, SHA-256 of the canonical bundle, tools, secrets, suggested rules,
+  `activation`), each with the version number in its AAD and inside the payload. The server accepts only
+  version = stored + 1 and keeps the version it replaces (one backup) for download. Restoring a backup uploads
+  it again as the next version.
+- *Activation* (chosen per upload, inside the encrypted meta so the server can't change it): `now`: running
+  `sw-mcp` processes load the new version at their next tool call (they look at most every 30 s, and at once
+  for a tool they don't know), drop actions of the replaced connector still waiting for approval, and send
+  `notifications/tools/list_changed`; `restart`: running processes keep the version they have, new ones load
+  the new one.
+- *Rollback.* Each machine records the highest version it has loaded of every connector
+  (`<token file>.connectors.json`) and refuses a lower one, also after restarts. The server can still withhold
+  an update or a connector (it can always deny service), but can't make a machine run older code or code from
+  another connector or account.
+- *Loading.* From memory (a meta-path finder serves the bundle's packages only; nothing is written to disk). A
+  version that fails to load is logged and the previous one keeps running.
+- *Approval.* Uploading while signed in is the approval: the code runs because the account owner put it
+  there. Machines record each download in the activity log (`connector.fetch`). Agents can't upload.
+- *Limits* (`count` connectors, `bytes` of stored ciphertext each) are set by the operator: a server default
+  (2 and 256 KB until plans exist) and per-account overrides. The operator's own connectors aren't limited
+  (up to 10 MB each). Lowering a limit never deletes anything; it only blocks new uploads.
+
+Endpoints (owner `{prefix}` = `/v1/admin` or `/v1/user`; every lookup checks the owner, another owner's object
+is a 404):
+
+| | |
+|---|---|
+| `GET {prefix}/connectors` | built-ins (with the projects using them), custom connectors (encrypted meta, owner-wrapped key, size, backup info, projects), limits |
+| `POST {prefix}/connectors` | `{id, blob, meta, wrapped_key}`, version 1 |
+| `PUT {prefix}/connectors/{cid}` | `{version, blob, meta}`: the next version; the current one becomes the backup |
+| `GET {prefix}/connectors/{cid}/download?which=current\|previous` | `{version, blob, meta}` |
+| `DELETE {prefix}/connectors/{cid}` | the connector, its backup and every project's use of it |
+| `PUT/DELETE {prefix}/projects/{pid}/connectors/{cid}` | turn on (`{wrapped_key}`: under the project key) / off |
+| `PUT/DELETE {prefix}/projects/{pid}/builtin-connectors/{name}` | turn a built-in on / off |
+| `GET /v1/connectors` (machine) | `{builtin: [names], custom: [{id, version, meta, wrapped_key}]}` for the token's project |
+| `GET /v1/connectors/{cid}` (machine) | `{id, version, blob}` if turned on for the token's project; audited |
+| `GET/PUT /v1/admin/settings/connector-limits`, `PUT /v1/admin/users/{uid}/connector-limits` | the operator's limits |
 
 ## Setup codes
 
@@ -564,10 +628,12 @@ allows the second-factor step, without changing anything else.
 |---|---|
 | `projects` | id, owner (account id, or empty for the operator), name, project key wrapped under the owner's key, the project's Telegram/ntfy settings (readable by the server, like the server-wide ones), whether action summaries stay encrypted |
 | `credentials` | id, kind, label, Argon2id(secret), project, owner, token-wrapped project key, expiry, revoked, last used/IP, allowed client addresses, approval policy, action policy, approval-limit reset time |
-| `users` | id, email, status, KDF parameters, salt, Argon2id(sign-in key), Argon2id(recovery proof), account key wrapped under the password-derived key and under the recovery key, dates, last sign-in IP, push allowed |
+| `users` | id, email, status, KDF parameters, salt, Argon2id(sign-in key), Argon2id(recovery proof), account key wrapped under the password-derived key and under the recovery key, dates, last sign-in IP, push allowed, own connector limits |
 | `sessions` | SHA-256(session token), account, kind (session or recovery ticket), stage, created, last seen, expiry, IP |
 | `approvals` | id, token, kind (`auth`, `fetch`, `action`), client address, SHA-256(nonce), match code, times, status, decided via; for actions also the name, risk, digest, encrypted summary and (only if the project allows) the plaintext summary |
 | `action_windows` | token, action name, until: open "approve similar for N minutes" windows |
+| `connectors` | id, owner, version, the code and its description (both encrypted under the connector's key), the key wrapped for the owner, size, dates, and the replaced version (encrypted) as a backup |
+| `project_connectors` | project, connector id or `builtin:<name>`, the connector key wrapped under the project key |
 | `setup_codes` | setup id (HKDF of the code, not the code), token, the token encrypted under the code, created, expiry; deleted when used, revoked or expired |
 | `approval_caps` | SHA-256(capability), approval, channel |
 | `approval_messages` | Telegram message id and the prompt text sent, so it can be updated when settled |

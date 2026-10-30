@@ -60,6 +60,7 @@ _BODY = {"type": "string", "description": "Plain-text body."}
 
 class Gmail(Connector):
     name = "gmail"
+    title = "Gmail"
     description = "Read and manage a Gmail mailbox."
     secrets = ("GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET", "GMAIL_REFRESH_TOKEN")
     suggested_rules = ("gmail.read.*=allow", "gmail.label=window:30m", "gmail.mark_read=window:30m",

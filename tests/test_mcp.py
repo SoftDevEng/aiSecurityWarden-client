@@ -277,7 +277,7 @@ def test_mcp_conversation(hub, server):
     by_id = {m.get("id"): m for m in out}
     assert len(out) == 8                                   # the notification got no answer
     init = by_id[1]["result"]
-    assert init["protocolVersion"] == "2025-03-26" and init["capabilities"] == {"tools": {"listChanged": False}}
+    assert init["protocolVersion"] == "2025-03-26" and init["capabilities"] == {"tools": {"listChanged": True}}
     assert "untrusted" in init["instructions"]
     assert {t["name"] for t in by_id[2]["result"]["tools"]} >= {"notes_delete", "check_approval"}
     call = by_id[3]["result"]

@@ -136,6 +136,7 @@ def tool(description: str, *, action: str, risk: str = "high", params: Mapping[s
 class Connector:
     """Base class for one application. Subclasses set ``name`` and ``secrets`` and declare tools."""
     name: ClassVar[str] = ""
+    title: ClassVar[str] = ""                  # display name, e.g. "Gmail" (default: the name, capitalised)
     secrets: ClassVar[tuple[str, ...]] = ()
     description: ClassVar[str] = ""
     #: rules to suggest for a token (swctl admin token set-actions --rule ...), first match wins
@@ -241,7 +242,8 @@ class Hub:
     SETUP_TOOL = "securitywarden_setup"
 
     def __init__(self, client: Any, connectors: Sequence[type[Connector]], *, setup: SetupTarget | None = None,
-                 log: Callable[[str], None] = _log, clock: Callable[[], float] = time.monotonic) -> None:
+                 log: Callable[[str], None] = _log, clock: Callable[[], float] = time.monotonic,
+                 source: Any = None, refresh_every: float = 30.0) -> None:
         self.client = client
         self.setup = setup
         self.offer_setup = setup is not None      # first setup, and a new token after the old one was revoked
@@ -250,17 +252,77 @@ class Hub:
         self.clock = clock
         self.instances: list[Connector] = []
         self.tools: dict[str, tuple[Connector, ToolSpec]] = {}
-        for cls in connectors:
-            inst = cls(self.ctx)
-            self.instances.append(inst)
-            for spec in cls.tool_specs():
-                full = f"{cls.name}_{spec.name}"
-                if full in self.tools or full in (self.CHECK_TOOL, self.SETUP_TOOL):
-                    raise ValueError(f"duplicate tool name {full}")
-                self.tools[full] = (inst, spec)
         self.pending: dict[str, _Pending] = {}
         # calls waiting for a person to let this token use SecurityWarden at all (session / fetch approval)
         self.pending_calls: dict[str, tuple[str, dict[str, Any], float]] = {}
+        self.static = list(connectors)            # named in the MCP settings
+        self.source = source                      # connectors turned on in SecurityWarden (see remote.py)
+        self.refresh_every = refresh_every
+        self._refreshed_at: float | None = None
+        self.tools_changed = False                # the MCP server tells the agent (notifications/tools/list_changed)
+        self._stale: dict[str, str] = {}          # request id -> tool, for actions dropped by a connector update
+        self.set_connectors(self.static, strict=True)
+
+    def set_connectors(self, connectors: Sequence[type[Connector]], *, strict: bool = False) -> bool:
+        """Use exactly these connector classes. Instances of classes kept are kept (with their waiting actions);
+        a replaced or removed connector is closed and its waiting actions dropped. Returns whether the tools
+        changed."""
+        keep = {type(i): i for i in self.instances}
+        instances: list[Connector] = []
+        tools: dict[str, tuple[Connector, ToolSpec]] = {}
+        names: set[str] = set()
+        for cls in dict.fromkeys(connectors):
+            try:
+                if cls.name in names:
+                    raise ValueError(f"two connectors are called {cls.name}")
+                specs = cls.tool_specs()
+                fulls = [f"{cls.name}_{spec.name}" for spec in specs]
+                for full in fulls:
+                    if full in tools or full in (self.CHECK_TOOL, self.SETUP_TOOL):
+                        raise ValueError(f"duplicate tool name {full}")
+                inst = keep.get(cls) or cls(self.ctx)
+            except Exception as e:  # noqa: BLE001
+                if strict:
+                    raise
+                self.log(f"connector {getattr(cls, 'name', cls)} not loaded: {_short(e)}")
+                continue
+            names.add(cls.name)
+            instances.append(inst)
+            for full, spec in zip(fulls, specs):
+                tools[full] = (inst, spec)
+        gone = [i for i in self.instances if i not in instances]
+        for rid, p in list(self.pending.items()):
+            owner = self.tools.get(p.tool, (None,))[0]
+            if owner in gone:
+                del self.pending[rid]
+                self._stale[rid] = p.tool
+        for inst in gone:
+            try:
+                inst.close()
+            except Exception:  # noqa: BLE001
+                pass
+        changed = set(tools) != set(self.tools) or any(tools[k][1] is not self.tools[k][1] for k in tools)
+        self.instances, self.tools = instances, tools
+        return changed
+
+    def refresh(self, *, force: bool = False) -> None:
+        """Pick up connectors turned on, off or updated in SecurityWarden (at most every refresh_every s)."""
+        if self.source is None or self.client is None:
+            return
+        now = self.clock()
+        if not force and self._refreshed_at is not None and now - self._refreshed_at < self.refresh_every:
+            return
+        self._refreshed_at = now
+        try:
+            extra = self.source.classes(self.client, self.log)
+        except (ApprovalPending, TokenRejected):
+            return                      # the tool call itself reports these
+        except Exception as e:  # noqa: BLE001 - never let this stop the tools that are loaded
+            self.log(f"couldn't check SecurityWarden for connector updates ({_short(e)})")
+            return
+        if extra is not None and self.set_connectors(self.static + list(extra)):
+            self.tools_changed = True
+            self.log(f"connectors now: {', '.join(i.name for i in self.instances) or 'none'} ({len(self.tools)} tools)")
 
     def close(self) -> None:
         for inst in self.instances:
@@ -269,6 +331,8 @@ class Hub:
     # -- listing --------------------------------------------------------------------
 
     def list_tools(self) -> list[dict[str, Any]]:
+        self.refresh()
+        self.tools_changed = False      # the agent is reading the new list right now
         out = []
         for full, (_inst, spec) in sorted(self.tools.items()):
             note = (" Needs the user's approval through SecurityWarden unless their rules allow it; if so you get "
@@ -306,10 +370,17 @@ class Hub:
         arguments = dict(arguments or {})
         if name == self.SETUP_TOOL and self.offer_setup:
             return self._setup(arguments)
-        if name != self.CHECK_TOOL and name not in self.tools:
+        if self.client is not None:
+            self.refresh()
+        known = name == self.CHECK_TOOL or name in self.tools
+        if not known and self.source is None:
             raise KeyError(name)
         if self.client is None and not self._load_client():
             return Result(NOT_SET_UP if self.setup else "SecurityWarden has no token configured.", True)
+        if not known:                   # maybe a connector turned on in SecurityWarden since the last look
+            self.refresh(force=True)
+            if name not in self.tools:
+                raise KeyError(name)
         if name == self.CHECK_TOOL and arguments.get("request_id") in self.pending_calls:
             name, arguments, _deadline = self.pending_calls.pop(arguments["request_id"])
         try:
@@ -382,6 +453,9 @@ class Hub:
 
     def _check(self, rid: str) -> Result:
         p = self.pending.get(rid)
+        if p is None and rid in self._stale:
+            return Result(f"The connector behind {self._stale.pop(rid)} was updated while this action waited, so it "
+                          "was dropped and nothing was done. Call the tool again if the user still wants it.", True)
         if p is None:
             return Result("There is no action waiting with that request_id (it may have finished already, or "
                           "this server restarted). Call the original tool again if the user still wants it.", True)
@@ -454,6 +528,7 @@ class Hub:
         self.client = client
         self.ctx.client = client
         self.ctx.forget_secrets()
+        self._refreshed_at = None       # look for the project's connectors with the new token
 
     def _setup(self, arguments: dict[str, Any]) -> Result:
         from ..client.setup import setup_from_code, token_file_exists
@@ -489,6 +564,7 @@ class Hub:
             self.log(f"setup failed: {_short(e)}")
             return Result(f"Setup didn't work: {_short(e)}. Nothing was stored.", True)
         self._use(self.setup.make_client(cred))
+        self.refresh(force=True)
         self.log("token replaced with a one-time code (the old one was rejected)" if replace
                  else "set up with a one-time code")
         return Result("SecurityWarden is set up on this machine. The tools work now: carry on with what the user "

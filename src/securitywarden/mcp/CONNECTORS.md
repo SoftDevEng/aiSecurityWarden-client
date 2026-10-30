@@ -45,6 +45,7 @@ from securitywarden.mcp import Connector, Plan, Summary, ToolError, tool, untrus
 
 class Notes(Connector):
     name = "notes"                         # lowercase; prefixes every action (notes.*) and tool (notes_*)
+    title = "Notes"                        # the name people see
     description = "Read and manage notes in Notes."
     secrets = ("NOTES_API_KEY",)           # every SecurityWarden secret this connector reads
     suggested_rules = ("notes.read.*=allow", "notes.update=window:30m", "notes.delete=each")
@@ -226,16 +227,40 @@ Install the package into the same Python environment as `sw-mcp` (`pip install .
 `--connector notes` works, `sw-mcp tools` lists it, and `sw-mcp check` checks it. Without packaging, a
 connector can also be named directly: `--connector mymodule:Notes` (the module must be importable).
 
-## 13. Using it
+Or, with no installing on each machine: upload it to SecurityWarden (next section).
+
+## 13. Distributing it through SecurityWarden (no pip on the agents' machines)
+
+```bash
+sw-mcp pack notes                  # writes notes.swconnector (refuses a connector that fails sw-mcp check)
+```
+
+On the SecurityWarden website: **Connectors > Upload...**, check the tools and risks shown, then turn it on for
+the projects whose agents should have it. Every `sw-mcp` using a token of those projects loads it, with no
+`--connector` needed. Uploading a newer `notes.swconnector` stores the next version (the one it replaces is kept
+as a backup to download or restore) and asks when running agents switch: **Go live now** (at their next tool
+call) or **On next restart**.
+
+For a connector to be packable:
+- everything it needs is in its own package: the standard library, `httpx` and `cryptography` are available;
+  nothing else is (no other pip packages, no compiled files);
+- only `.py`, `.json`, `.txt` and `.md` files are packed; don't name packages after standard modules;
+- set `title = "Notes"` on the class for the name people see.
+
+The code is encrypted in the browser before upload; the server can't read it. Machines refuse a version older
+than one they have already run.
+
+## 14. Using it
 
 1. SecurityWarden website: a project with the connector's secrets; a token for the agent with the suggested
-   rules (token → Manage → Change actions).
-2. The agent's MCP settings: command `sw-mcp`, arguments `serve --connector notes`, environment
-   `SW_SERVER_URL` and `SW_ACCESS_TOKEN_FILE` (a file that doesn't need to exist yet).
+   rules (token → Manage → Change actions). Turn the connector on for the project under Connectors (or install
+   the package where the agent runs and name it in the MCP settings).
+2. The agent's MCP settings: command `sw-mcp`, arguments `serve`, environment `SW_SERVER_URL` and
+   `SW_ACCESS_TOKEN_FILE` (a file that doesn't need to exist yet).
 3. Give the agent the token's setup code: "Set up SecurityWarden with code SWS1-...".
 4. Try a tool by hand: `sw-mcp call notes_search query=shopping`.
 
-## 14. Checklist (before calling it done)
+## 15. Checklist (before calling it done)
 
 - [ ] `sw-mcp check --connector NAME` reports no errors (and you've read the warnings).
 - [ ] `pytest` passes, with the tests listed in section 11.
@@ -245,8 +270,10 @@ connector can also be named directly: `--connector mymodule:Notes` (the module m
 - [ ] Outside text is returned with `untrusted(...)`.
 - [ ] No secret appears in args, summaries, results, errors or logs.
 - [ ] Tell the user which secrets to add and the suggested rules.
+- [ ] To share it through SecurityWarden: `sw-mcp pack NAME` works (only the standard library, httpx and
+      cryptography are used).
 
-## 15. A complete example
+## 16. A complete example
 
 The Gmail connector is a full reference (OAuth, search and read, batches with summaries, sending with exact
 recipients and body, untrusted email content):

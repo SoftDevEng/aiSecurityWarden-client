@@ -31,6 +31,7 @@ class StdioServer:
     def __init__(self, hub: Hub, *, name: str = "securitywarden") -> None:
         self.hub = hub
         self.name = name
+        self.initialized = False
 
     def serve(self, stdin: IO[bytes] | None = None, stdout: IO[bytes] | None = None) -> None:
         stdin = stdin or sys.stdin.buffer
@@ -50,6 +51,9 @@ class StdioServer:
                 reply = self.handle_line(line)
                 if reply is not None:
                     self._send(stdout, reply)
+                if self.initialized and self.hub.tools_changed:      # a connector was turned on, off or updated
+                    self.hub.tools_changed = False
+                    self._send(stdout, {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
         finally:
             self.hub.close()
 
@@ -68,6 +72,8 @@ class StdioServer:
                 return None                     # a response to something we never sent: ignore
             return _error(msg.get("id") if isinstance(msg, dict) else None, INVALID_REQUEST, "invalid request")
         if "id" not in msg:
+            if msg["method"] == "notifications/initialized":
+                self.initialized = True
             return None                         # notifications (initialized, cancelled...) need no answer
         mid, method, params = msg["id"], msg["method"], msg.get("params") or {}
         if not isinstance(params, dict):
@@ -77,7 +83,7 @@ class StdioServer:
                 asked = params.get("protocolVersion")
                 return _result(mid, {
                     "protocolVersion": asked if asked in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
-                    "capabilities": {"tools": {"listChanged": False}},
+                    "capabilities": {"tools": {"listChanged": True}},
                     "serverInfo": {"name": self.name, "version": __version__},
                     "instructions": INSTRUCTIONS,
                 })
