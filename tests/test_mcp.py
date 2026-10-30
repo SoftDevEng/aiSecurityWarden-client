@@ -25,7 +25,7 @@ class FakeServer:
 
     def _alive(self):
         if self.revoked:
-            raise TokenRejected("the token was rejected (invalid credential): revoked, expired or wrong")
+            raise TokenRejected("authentication failed (401): invalid credential (the token was revoked, expired or is wrong)")
 
     def check_token(self):
         self._alive()

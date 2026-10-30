@@ -119,7 +119,7 @@ class SecurityWardenClient:
                                      lambda aid: self.http.post(f"{self.base}/v1/auth/approvals/{aid}", json=proof))
         if r.status_code != 200:
             if r.status_code == 401:
-                raise TokenRejected(f"the token was rejected ({_detail(r)}): revoked, expired or wrong")
+                raise TokenRejected(f"authentication failed (401): {_detail(r)} (the token was revoked, expired or is wrong)")
             raise SecurityWardenError(f"authentication failed ({r.status_code}): {_detail(r)}")
         self._take_session(r)
 
