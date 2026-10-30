@@ -50,6 +50,8 @@ admin key ──wrap──▶ project_key ◀──wrap── machine token key 
 | project key for a token | `sw1\|pkey\|<project_id>\|<token_id>` |
 | project key for the admin | `sw1\|pkey-admin\|<project_id>` |
 | secret blob | `sw1\|secret\|<project_id>\|<name_mac>` |
+| action summary | `sw1\|action\|<project_id>\|<request_id>` |
+| machine token under a setup code | `sw1\|setup\|<setup_id>` |
 
 The AAD stops a malicious server from substituting ciphertext across projects, tokens
 or secret names. Secret blobs contain `{"n": name, "v": value}`. The client also checks
@@ -254,6 +256,188 @@ does not echo it back, the client revokes the token.
   compromised server still cannot decrypt. Changes the wire format; bumps `sw1` / `v1.`.
 - Locking a token after N consecutive denials.
 
+## Action approval
+
+Human approval of the **secrets** stops a stolen token. It doesn't stop an AI agent that has its secrets
+from doing something it shouldn't: sending an email it was tricked into sending by another email
+(prompt injection), deleting the wrong messages, placing an order. Action approval puts a person in
+front of each **action** the agent's tools take. It is generic: the server knows actions by name,
+never what Gmail or any other application is.
+
+Honest limit: it protects against the agent, not against someone who controls the agent's machine
+(the application's own credentials have to be on that machine to call it).
+
+### Actions
+
+An action has a **name** (`<app>.<verb>[.<more>]`, lowercase letters, digits and `_`, 2 to 6 parts:
+`gmail.send`, `gmail.read.search`, `webull.order.place`), a **risk** declared by the connector (`low`,
+`medium`, `high`), a **summary** for the person deciding, and a **digest** of exactly what will be done:
+
+    digest = SHA-256( "sw1|action-digest|" ‖ canonical JSON {"action": name, "args": args} )
+
+Canonical JSON: keys sorted, no whitespace, UTF-8 (not `\u`-escaped), no floats. Large content (a body,
+an attachment) goes into `args` as its own SHA-256. An approval is bound to the digest: if the agent
+changes one recipient or one word after asking, it is a different action and needs a new approval.
+
+The **summary** is `{"title", "fields": [[label, value], ...], "preview"?, "count"}` (title ≤ 100
+characters, ≤ 10 fields, preview ≤ 500, `count` > 1 for a batch such as "archive 40 messages").
+The client always sends it encrypted under the project key
+(`HKDF(project_key, "securitywarden/v1/action-summary")`, AAD above) as `summary_enc`, which the web
+pages and `swctl` decrypt. It also sends it in plaintext as `summary` unless the project keeps summaries
+encrypted: then the server, the activity log and phone messages never see the content (phone messages
+say only "jarvis wants to: gmail.send — open SecurityWarden to review", without buttons).
+
+### Policy (per token, set by an admin; the agent can't change it)
+
+    {"channels": ["admin_ui", "push:telegram"], "timeout": 3600, "max_pending": 5, "max_per_hour": 60,
+     "rules": [{"match": "gmail.read.*", "mode": "allow"},
+               {"match": "gmail.label",  "mode": "window", "window": 1800},
+               {"match": "gmail.send",   "mode": "each"},
+               {"match": "*",            "mode": "each"}]}
+
+Rules are tried in order and the first match decides; nothing matched means `each`. `match` is an
+exact name, `prefix.*` (the prefix itself and everything under it) or `*`.
+
+| Mode | Meaning |
+|---|---|
+| `allow` | no person asked; still logged |
+| `each` | a person approves this one action |
+| `window` | a person approves once; the same action name is then allowed for `window` seconds (60 to 86400) |
+| `deny` | refused |
+
+A `high`-risk action is never `allow` or `window`: such rules are tightened to `each`. Risk only ever
+tightens; a rule is the most an agent can get. No policy (NULL) means: ask for every action, on the
+website (`admin_ui`), timeout 1 hour. Limits: `timeout` 60 s to 24 h (the agent checks back, it doesn't
+block), `max_pending` 1 to 50, `max_per_hour` 1 to 1000. Changing a token's action policy, revoking it
+or resetting its limits ends pending action requests and open windows.
+
+### Protocol (machine token)
+
+- `GET /v1/actions/config` → `{"project_id", "wrapped_key", "summaries": "plain" | "encrypted"}`: the
+  token-wrapped project key, so the client can encrypt summaries without fetching secrets.
+- `POST /v1/actions` with `{"id", "action", "risk", "digest", "nonce", "summary_enc", "summary"?}`
+  (`id` chosen by the client, so it can be in the summary's AAD; `nonce` 128 random bits):
+  - `200 {"status": "approved"}`: allowed (by `allow`, or an open window). Already used: do it now.
+  - `202 {"status": "pending", "request_id", "match", "expires_in", "check_after"}`: a person has been
+    asked, by the token's action-policy channels, with the match code.
+  - `403 action_denied`: the policy says `deny`. `429`: limits.
+- `POST /v1/actions/{id}` with `{"nonce", "digest"}` (same token and client address as the request):
+  `202` still pending; `200 {"status": "approved"}` once, when approved (it is used up by this call);
+  `403 approval_denied | approval_expired | approval_cancelled | approval_used | approval_mismatch |
+  action_mismatch` otherwise.
+
+Pending action requests use the same machinery as session and fetch approvals: match codes, one-time
+capabilities in the Telegram / ntfy buttons (per project approval setup), the Approvals pages, the
+prompts that update to "Approved in Telegram.", per-owner tenancy and the activity log (action name,
+risk, decision and channel; the summary only when the project allows plaintext summaries).
+
+### The agent's side
+
+The MCP framework (`securitywarden.mcp`) does this for every connector: before a tool marked as an
+action runs, it computes the digest and summary and asks. Pending: the tool returns
+`{"status": "waiting_for_approval", "request_id", "match", "check_after"}` to the AI at once; the AI
+calls `check_approval(request_id)` later, which performs the stored action, with exactly the stored
+arguments, once it is approved.
+
+## MCP connectors
+
+`sw-mcp serve` is a Model Context Protocol server (stdio, JSON-RPC 2.0, one message per line; written on the
+standard library rather than the MCP SDK so the client keeps two dependencies). It serves the tools of the
+enabled connectors plus `check_approval`. A connector is one class per application:
+
+- `name` (the action prefix), `secrets` (names it reads from the token's project), `suggested_rules`;
+- tools declared with `@tool(description, action=..., risk=..., params=..., required=...)`. A tool doesn't do
+  anything: it **prepares** a `Plan(args, summary, run)`. `args` (JSON values, no floats) decides everything
+  `run` does; `run(args)` gets nothing else. Preparing may look things up (e.g. the sender of the email being
+  replied to) so that `args` and the summary are complete; nothing it reads goes back to the AI.
+
+For each call the framework:
+
+1. checks the arguments against the tool's schema;
+2. prepares the plan and computes `action_digest(action, args)`;
+3. if the same action with the same digest is already waiting, checks that request instead of asking again;
+4. asks the server (`POST /v1/actions`): allowed → `run(args)` now; pending → stores the plan in memory and
+   answers `waiting_for_approval` (it names only the action, never the summary, which may hold outside text);
+   denied or refused → says so, nothing runs;
+5. `check_approval(request_id)` → `POST /v1/actions/{id}`; approved → `run` with a copy of the stored
+   `args`, once. A plan lives only in this process (lost on restart: the AI simply asks again).
+
+Results are text. Anything that came from outside (an email, a web page) is returned as `untrusted(...)`,
+which the framework renders inside `<untrusted-content boundary="<random>">` with a note that it is data,
+not instructions; the random boundary can't be closed from inside the content. Logs (stderr) carry tool
+names, action names and request ids, never arguments or content. Secrets are fetched with the machine token
+when first needed and kept in memory; they never appear in results or logs.
+
+**No call waits for a person.** `sw-mcp` makes its client with `wait_for_approval=False`: when the token
+itself needs a person's OK (session or every-fetch approval), the client raises `ApprovalPending` instead of
+polling, and the tool answers `waiting_for_approval` with `action` `securitywarden.session` /
+`securitywarden.fetch` at once. `check_approval` with that request id resumes the same call (the client keeps
+the nonce and proof and checks the same approval; it never asks twice). So every tool call returns within
+seconds and the agent's own tool timeout never needs raising.
+
+**First-time setup.** If the configured token file doesn't exist yet, the tools answer "not set up: ask the user
+for a setup code", and the extra tool `securitywarden_setup(code)` is offered. It redeems the code at the
+configured server only (never one the agent names), stores the token (see "Setup codes") and switches the
+tools on. The token never appears in a tool result.
+
+**Changing the token = revoking it.** While the stored token works, `securitywarden_setup` refuses, so content
+that tricks the agent into calling it can't swap the token. Once the server rejects the token itself (HTTP 401
+on sign-in: revoked, expired or deleted; the client raises `TokenRejected`), every tool answers "the token was
+revoked: ask the user for a new setup code", and `securitywarden_setup` checks with the server
+(`check_token()`) and then replaces the file. Network errors, rate limits, address lists and pending approvals
+never count as rejected. Only someone signed in to the token's SecurityWarden account can revoke it.
+
+Rules are in SecurityWarden, so a compromised or confused agent can't loosen them; the connector's declared
+risk can only tighten them (high-risk actions always ask). The honest limit stays: whoever controls the
+agent's machine holds the token and the application's credentials.
+
+**Finding connectors.** By name from the entry-point group `securitywarden.connectors` (installed packages
+declare `name = "module:Class"`; Gmail is registered the same way), or directly as `module:Class`. A connector's
+actions must start with its `name`. `sw-mcp check` lints connectors (names, schemas against method signatures, no
+floats, suggested rules); `securitywarden.mcp.testing` gives connector tests a fake SecurityWarden; the guide for
+authors (and their AI) ships as `securitywarden/mcp/CONNECTORS.md` (`sw-mcp guide`).
+
+### Gmail (`securitywarden.mcp.gmail`)
+
+OAuth only (a Google Cloud "Desktop app" client; scope `gmail.modify`). Secrets: `GMAIL_CLIENT_ID`,
+`GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`. `sw-mcp login gmail` runs Google's sign-in once (loopback
+redirect on 127.0.0.1, PKCE S256, a random state) and stores the refresh token in the project with the admin
+credential (`--project`) or shows it once to paste into the website.
+
+| Tool | Action | Risk | Suggested rule |
+|---|---|---|---|
+| `gmail_search`, `gmail_read`, `gmail_read_thread`, `gmail_labels` | `gmail.read.*` | low | allow |
+| `gmail_label`, `gmail_archive`, `gmail_mark_read` | `gmail.label`, `.archive`, `.mark_read` | low | window 30 min |
+| `gmail_draft` | `gmail.draft` | medium | each |
+| `gmail_send`, `gmail_reply`, `gmail_forward`, `gmail_trash` | `gmail.send`, `.reply`, `.forward`, `.trash` | high | each (always) |
+
+Sending digests the full recipients, subject and body; a reply also the thread and the headers it answers;
+a forward the original message id (Gmail messages don't change). Addresses and subjects are checked
+(no line breaks: no header injection), at most 50 recipients and 100 messages per batch.
+
+## Setup codes
+
+A machine token is long, works until revoked, and has to end up in a file only the machine's user can read.
+A **setup code** carries it there instead: `SWS1-` + 32 base32 characters (160 random bits), made where the token
+is created (website, `swctl admin token create --setup-code`), working once, for 1–60 minutes (10 by default).
+
+- Creating: `setup_id = b64url(HKDF(code_secret, "securitywarden/v1/setup-id", 16 bytes))`; the token string is
+  sealed under `HKDF(code_secret, "securitywarden/v1/setup-key")` with AAD `sw1|setup|<setup_id>`;
+  `POST /v1/{admin,user}/tokens/{id}/setup-codes {id, blob, expires_in}` (owner checked, token active, at most
+  5 open codes per token).
+- Redeeming: `POST /v1/setup/{setup_id}`, no credential: returns `{blob}` once and deletes the row in the same
+  step. Unknown, used and expired codes all answer 404 and count as failures for the address (rate limit);
+  the token's allowed addresses apply. Revoking the token deletes its codes.
+- The client decrypts, checks it is a machine token, and writes it with `store_credential`: a temporary file
+  created mode 600 in a 700 folder (POSIX), or with inherited permissions removed and only the current user
+  granted (Windows, `icacls`), then renamed into place. An existing token is never replaced without
+  `--replace`, and the code isn't used up when that would fail.
+- The server sees neither the code nor the token, only the derived id and the ciphertext. Once used, a code is
+  worthless, so it may sit in a chat with the agent or an email. If setup says a code was already used and
+  nobody here used it, someone else collected the token: revoke it.
+
+Ways to redeem: the agent's `securitywarden_setup` tool, `sw-mcp setup`, `swctl setup`.
+
 ## Web front end
 
 `web/` is a Svelte 5 + TypeScript single-page app, built by Vite into
@@ -378,11 +562,13 @@ allows the second-factor step, without changing anything else.
 
 | Table | Contents |
 |---|---|
-| `projects` | id, owner (account id, or empty for the operator), name, project key wrapped under the owner's key, the project's Telegram/ntfy settings (readable by the server, like the server-wide ones) |
-| `credentials` | id, kind, label, Argon2id(secret), project, owner, token-wrapped project key, expiry, revoked, last used/IP, allowed client addresses, approval policy, approval-limit reset time |
+| `projects` | id, owner (account id, or empty for the operator), name, project key wrapped under the owner's key, the project's Telegram/ntfy settings (readable by the server, like the server-wide ones), whether action summaries stay encrypted |
+| `credentials` | id, kind, label, Argon2id(secret), project, owner, token-wrapped project key, expiry, revoked, last used/IP, allowed client addresses, approval policy, action policy, approval-limit reset time |
 | `users` | id, email, status, KDF parameters, salt, Argon2id(sign-in key), Argon2id(recovery proof), account key wrapped under the password-derived key and under the recovery key, dates, last sign-in IP, push allowed |
 | `sessions` | SHA-256(session token), account, kind (session or recovery ticket), stage, created, last seen, expiry, IP |
-| `approvals` | id, token, kind, client address, SHA-256(nonce), match code, times, status, decided via |
+| `approvals` | id, token, kind (`auth`, `fetch`, `action`), client address, SHA-256(nonce), match code, times, status, decided via; for actions also the name, risk, digest, encrypted summary and (only if the project allows) the plaintext summary |
+| `action_windows` | token, action name, until: open "approve similar for N minutes" windows |
+| `setup_codes` | setup id (HKDF of the code, not the code), token, the token encrypted under the code, created, expiry; deleted when used, revoked or expired |
 | `approval_caps` | SHA-256(capability), approval, channel |
 | `approval_messages` | Telegram message id and the prompt text sent, so it can be updated when settled |
 | `secrets` | project, HMAC(name), AES-GCM blob |
@@ -396,5 +582,7 @@ Project names, token labels and account emails are plaintext metadata. Pick name
 - One admin credential per database. Admin key rotation (re-wrap all project keys) is planned.
 - The rate limiter is per process. Behind several workers, use one worker or a front-end limiter.
 - No secret versioning or history yet.
+- MCP connectors: Gmail first; the Webull trading server is next on the framework. Plans waiting for approval
+  live in the MCP server's memory only.
 - Possible future additions: a native Hermes secret-source plugin (`ctx.register_secret_source()`),
   multi-user accounts for the web front end, and Postgres support.

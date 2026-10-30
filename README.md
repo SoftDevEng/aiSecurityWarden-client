@@ -121,6 +121,26 @@ Hermes supports custom vaults through a **command helper** that prints `KEY=VALU
 lines at launch. That's exactly what `swctl export` does. See
 [examples/hermes/](examples/hermes/) for a wrapper script and config.
 
+### AI agent tools with approval (`sw-mcp`)
+
+`sw-mcp` gives an agent tools for an application, such as Gmail, as an MCP server. Every action goes through
+the token's rules in SecurityWarden: reading may be allowed outright, while sending an email waits until you
+approve exactly that email (on the website, in swadmin, Telegram or ntfy). The agent is told it's waiting and
+checks back. See [docs/mcp-gmail.md](docs/mcp-gmail.md) for the Gmail set-up with Hermes, and
+[DESIGN.md](docs/DESIGN.md#mcp-connectors) for writing a connector for another application.
+
+```bash
+sw-mcp tools --connector gmail          # the tools, their actions, risks and suggested rules
+sw-mcp serve --connector gmail          # what Hermes runs (stdio)
+sw-mcp call gmail_search query=is:unread limit=5   # try one tool by hand; waits for approval if needed
+sw-mcp setup --token-file ~/.config/securitywarden/gmail-token   # store the token from a one-time setup code
+```
+
+Other applications get a **connector**: one Python class whose tools each declare an action and a risk. An AI can
+write one: `sw-mcp new-connector NAME` creates the project (with instructions for the AI in `AGENTS.md`),
+`sw-mcp guide` prints the rules, and `sw-mcp check` plus the generated tests confirm it's right. Installed
+connector packages are found by name (`--connector NAME`). See [docs/connectors.md](docs/connectors.md).
+
 ## Admin commands
 
 | Command | |

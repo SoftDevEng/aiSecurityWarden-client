@@ -10,6 +10,8 @@ Admin use::
     swctl admin secret set hermes-webull WEBULL_APP_KEY        # prompts, value never in argv
     swctl admin token create hermes-webull --name jarvis --expires-days 180
     swctl admin token set-approval <token-id> --approval session --session-ttl 8h --channel admin_ui
+    swctl admin token set-actions <token-id> --rule 'gmail.read.*=allow' --rule 'gmail.label=window:30m' \
+          --rule 'gmail.send=each' --channel admin_ui --channel push:telegram
     swctl admin approvals list
 """
 
@@ -27,8 +29,8 @@ import sys
 from datetime import datetime, timezone
 
 from .. import __version__
-from ..approval import CHANNELS, DEFAULTS, describe, parse_duration
-from .api import SecurityWardenClient, SecurityWardenError
+from ..approval import CHANNELS, DEFAULTS, describe, describe_actions, parse_action_rule, parse_duration
+from .api import SecurityWardenClient, SecurityWardenError, action_lines
 from ..crypto import CryptoError
 
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -141,6 +143,28 @@ def cmd_run(args: argparse.Namespace) -> int:
 # admin commands
 # ---------------------------------------------------------------------------
 
+def cmd_setup(args: argparse.Namespace) -> int:
+    """Put this machine's token in place from a one-time setup code (made on the website or with
+    ``swctl admin token create --setup-code``)."""
+    from .setup import setup_from_code, token_file_exists
+    path = args.token_file or os.environ.get("SW_ACCESS_TOKEN_FILE") or _default_token_file()
+    if token_file_exists(path) and not args.replace:
+        _die(f"{os.path.expanduser(path)} already holds a token (use --replace to swap it for a new one)")
+    code = sys.stdin.readline() if args.code_stdin else getpass.getpass("Setup code (SWS1-..., not shown): ")
+    try:
+        cred, where = setup_from_code(_server(args), code, path, replace=args.replace, verify=_verify(args))
+    except (SecurityWardenError, OSError) as e:
+        _die(str(e))
+    print(f"Token {cred.id} stored in {where} (readable by you only).", file=sys.stderr)
+    if not (args.token_file or os.environ.get("SW_ACCESS_TOKEN_FILE")):
+        print(f"Point SW_ACCESS_TOKEN_FILE at it, or pass --token-file {where}.", file=sys.stderr)
+    return 0
+
+
+def _default_token_file() -> str:
+    return os.path.join("~", ".config", "securitywarden", "token")
+
+
 def cmd_project(args: argparse.Namespace) -> int:
     c = _admin_client(args)
     if args.action == "create":
@@ -212,10 +236,18 @@ def cmd_token(args: argparse.Namespace) -> int:
     c = _admin_client(args)
     if args.action == "create":
         tok = c.create_token(args.project, args.name, args.expires_days, args.allow_ip, _policy_from_args(args))
-        print(f"Machine token for {args.name} (project {args.project}). Shown ONCE:\n", file=sys.stderr)
-        print(str(tok))
-        print("\nStore it on the machine in a chmod 600 file and point SW_ACCESS_TOKEN_FILE at it.",
-              file=sys.stderr)
+        if args.setup_code:
+            code = c.create_setup_code(tok.id, tok)
+            print(f"Setup code for {args.name} (project {args.project}); works once, for 10 minutes:\n",
+                  file=sys.stderr)
+            print(code)
+            print("\nOn the machine: swctl setup (or sw-mcp setup), or tell its AI agent to set up SecurityWarden "
+                  "with this code.", file=sys.stderr)
+        else:
+            print(f"Machine token for {args.name} (project {args.project}). Shown ONCE:\n", file=sys.stderr)
+            print(str(tok))
+            print("\nOn the machine, swctl setup is easier: create the token with --setup-code instead. Or store "
+                  "it in a file only its user can read and point SW_ACCESS_TOKEN_FILE at it.", file=sys.stderr)
         if args.allow_ip:
             print(f"It only works from: {', '.join(args.allow_ip)}", file=sys.stderr)
         if args.approval not in (None, "none"):
@@ -228,7 +260,8 @@ def cmd_token(args: argparse.Namespace) -> int:
             print(f"{t['id']}  {t['name']:<20} {names.get(t['project_id'], '-'):<20} {state:<8} "
                   f"expires {_ts(t['expires_at'])}  last used {_ts(t['last_used_at'])} {t['last_ip'] or ''}"
                   f"  from {', '.join(t.get('allowed_ips') or ['any'])}  approval {describe(t.get('approval'))}"
-                  + (f" ({t['approvals_this_hour']}/{t['approval']['max_per_hour']} this hour)" if t.get("approval") else ""))
+                  + (f" ({t['approvals_this_hour']}/{t['approval']['max_per_hour']} this hour)" if t.get("approval") else "")
+                  + f"  actions {describe_actions(t.get('actions'))}")
     elif args.action == "set-ips":
         if bool(args.allow_ip) == args.any:
             _die("give either --allow-ip (one or more) or --any")
@@ -239,6 +272,24 @@ def cmd_token(args: argparse.Namespace) -> int:
             _die("give --approval none, session or every_fetch")
         policy = c.set_token_approval(args.id, _policy_from_args(args))
         print(f"{args.id} approval: {describe(policy)} (pending requests and approved sessions were cancelled)")
+    elif args.action == "set-actions":
+        if args.default and (args.rule or args.channel or args.action_timeout):
+            _die("--default replaces the whole action policy; give it alone")
+        policy = None
+        if not args.default:
+            try:
+                policy = {"rules": [parse_action_rule(r) for r in args.rule or []]}
+                if args.channel:
+                    policy["channels"] = args.channel
+                if args.action_timeout:
+                    policy["timeout"] = parse_duration(args.action_timeout)
+                for key in ("max_pending", "max_per_hour"):
+                    if getattr(args, key) is not None:
+                        policy[key] = getattr(args, key)
+            except ValueError as e:
+                _die(str(e))
+        policy = c.set_token_actions(args.id, policy)
+        print(f"{args.id} actions: {describe_actions(policy)} (pending action requests and open windows ended)")
     elif args.action == "reset-approval-limits":
         n = c.reset_approval_limits(args.id)
         print(f"{args.id} may ask for approval again now ({n} pending request(s) cancelled)")
@@ -255,10 +306,12 @@ def cmd_approvals(args: argparse.Namespace) -> int:
         if not rows:
             print("no pending approval requests", file=sys.stderr)
         for a in rows:
-            what = "session" if a["kind"] == "auth" else "fetch"
+            what = {"auth": "session", "fetch": "fetch"}.get(a["kind"], "action")
             note = "" if a["decidable"] else "  (not decidable here: admin_ui is not a channel)"
             print(f"{a['id']}  match {a['match']}  {a['token_name']:<20} {what:<8} from {a['ip']:<16} "
                   f"expires {_ts(a['expires_at'])}{note}")
+            if a["kind"] == "action":
+                print(f"    {_action_text(c, a)}")
     else:
         if args.match is not None:
             pending = {a["id"]: a for a in c.list_approvals()}
@@ -269,6 +322,11 @@ def cmd_approvals(args: argparse.Namespace) -> int:
         status = c.decide_approval(args.id, args.action == "approve")
         print(f"{args.id} {status}")
     return 0
+
+
+def _action_text(c: SecurityWardenClient, a: dict) -> str:
+    """What an action request wants (decrypted here when the project keeps summaries encrypted)."""
+    return action_lines(a["action"], c.action_summary(a)).replace("\n", "\n    ")
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
@@ -308,6 +366,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("command", nargs=argparse.REMAINDER)
     r.set_defaults(func=cmd_run)
 
+    st = sub.add_parser("setup", help="store this machine's token from a one-time setup code")
+    st.add_argument("--replace", action="store_true", help="replace a token that is already stored")
+    st.add_argument("--code-stdin", action="store_true", help="read the code from stdin instead of asking")
+    st.set_defaults(func=cmd_setup)
+
     a = sub.add_parser("admin", help="administer projects, secrets and tokens").add_subparsers(
         dest="area", required=True)
 
@@ -331,6 +394,8 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--expires-days", type=float)
     x.add_argument("--allow-ip", action="append", metavar="ADDR",
                    help="address or CIDR range the token may connect from (repeatable; default: any)")
+    x.add_argument("--setup-code", action="store_true",
+                   help="print a one-time setup code for the machine instead of the token itself")
     x = tos.add_parser("set-ips", help="replace the addresses a token may connect from")
     x.add_argument("id")
     x.add_argument("--allow-ip", action="append", metavar="ADDR")
@@ -339,6 +404,16 @@ def build_parser() -> argparse.ArgumentParser:
     x = tos.add_parser("set-approval", help="require (or stop requiring) a person to approve this token's use")
     x.add_argument("id")
     _approval_args(x)
+    x = tos.add_parser("set-actions", help="which actions this token's AI agent may take, and how a person approves them")
+    x.add_argument("id")
+    x.add_argument("--rule", action="append", metavar="ACTION=MODE",
+                   help="first match wins: gmail.send=each, gmail.read.*=allow, gmail.label=window:30m, *=deny "
+                        "(repeatable; anything unmatched asks every time)")
+    x.add_argument("--channel", action="append", choices=CHANNELS, help="where action requests go (default admin_ui)")
+    x.add_argument("--action-timeout", metavar="DURATION", help="how long a request waits for a person (default 1h)")
+    x.add_argument("--max-pending", type=int, help="outstanding action requests allowed (default 5)")
+    x.add_argument("--max-per-hour", type=int, help="action requests allowed per hour (default 60)")
+    x.add_argument("--default", action="store_true", help="back to the defaults: ask for every action")
     x = tos.add_parser("reset-approval-limits",
                        help="let a token ask for approval again now (restarts its hourly limit, cancels pending)")
     x.add_argument("id")
