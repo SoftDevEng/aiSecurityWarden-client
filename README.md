@@ -141,6 +141,11 @@ write one: `sw-mcp new-connector NAME` creates the project (with instructions fo
 `sw-mcp guide` prints the rules, and `sw-mcp check` plus the generated tests confirm it's right. Installed
 connector packages are found by name (`--connector NAME`). See [docs/connectors.md](docs/connectors.md).
 
+Connectors can also come from SecurityWarden itself: turn a built-in one (Gmail) on for a project on the website,
+or upload your own (`sw-mcp pack NAME`, then **Connectors > Upload**; encrypted in the browser, account-wide,
+versioned with a backup of the version replaced). `sw-mcp serve` then loads whatever the token's project uses,
+with no `--connector` needed, and picks up new versions as you choose: at once, or on the next restart.
+
 ## Admin commands
 
 | Command | |

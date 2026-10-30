@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 from ..client.api import ApprovalError, TokenRejected
+from .. import crypto
 from ..crypto import action_digest
 from .framework import Connector, Hub
 
@@ -35,6 +36,10 @@ class FakeSecurityWarden:
         self.revoked = False
         self.fetches = 0
         self._n = 0
+        # connectors turned on for the token's project (see publish())
+        self.builtin: list[str] = []
+        self.custom: dict[str, dict[str, Any]] = {}
+        self._pid, self._pkey = crypto.new_id(), crypto.new_key()
 
     # what a test calls
 
@@ -48,7 +53,38 @@ class FakeSecurityWarden:
         """The most recent request: action, args, risk, summary, digest, state."""
         return list(self.requests.values())[-1]
 
+    def publish(self, bundle: dict[str, Any], *, activation: str = "now", connector_id: str | None = None,
+                version: int | None = None) -> str:
+        """Store a connector bundle as the website would (encrypted, next version) and turn it on."""
+        from .bundle import summary
+        cid = connector_id or crypto.new_id()
+        cur = self.custom.get(cid)
+        ckey = cur["key"] if cur else crypto.new_connector_key()
+        ver = version if version is not None else (cur["version"] + 1 if cur else 1)
+        meta = dict(summary(bundle), activation=activation)
+        blob, mblob = crypto.encrypt_connector(ckey, cid, ver, bundle, meta)
+        self.custom[cid] = {"key": ckey, "version": ver, "blob": blob, "meta": mblob,
+                            "wrapped_key": crypto.wrap_connector_key_for_project(ckey, self._pkey, self._pid, cid)}
+        return cid
+
     # what the framework calls (the SecurityWardenClient interface)
+
+    def connectors(self) -> dict[str, Any]:
+        self._alive()
+        return {"builtin": list(self.builtin),
+                "custom": [{"id": cid, "version": c["version"], "wrapped_key": c["wrapped_key"], "meta": c["meta"]}
+                           for cid, c in self.custom.items()]}
+
+    def _ckey(self, entry: dict[str, Any]) -> bytes:
+        return crypto.unwrap_connector_key_for_project(entry["wrapped_key"], self._pkey, self._pid, entry["id"])
+
+    def connector_meta(self, entry: dict[str, Any]) -> dict[str, Any]:
+        return crypto.decrypt_connector_meta(self._ckey(entry), entry["id"], entry["version"], entry["meta"])
+
+    def connector_bundle(self, entry: dict[str, Any]) -> dict[str, Any]:
+        self._alive()
+        c = self.custom[entry["id"]]
+        return crypto.decrypt_connector_bundle(self._ckey(entry), entry["id"], entry["version"], c["blob"])
 
     def _rule(self, action: str) -> str:
         if action in self.rules:

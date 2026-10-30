@@ -478,3 +478,110 @@ def decrypt_from_setup(secret: bytes, blob: str) -> Credential:
     if cred.kind != KIND_MACHINE:
         raise CryptoError("setup payload is not a machine token")
     return cred
+
+
+# ---------------------------------------------------------------------------
+# connectors stored in SecurityWarden (see DESIGN.md "Connector distribution")
+#
+# Each connector has its own random key. The key is wrapped for its owner (the account key, or the
+# operator's admin key) and for every project that uses the connector (the project key), so a project's
+# machines can read only the connectors turned on for that project. Each upload is a new version: the
+# version number is in the AAD and inside the payload, and machines refuse a version lower than one they
+# have loaded.
+# ---------------------------------------------------------------------------
+
+CONNECTOR_ID_RE = ID_RE
+CONNECTOR_ACTIVATIONS = ("now", "restart")
+
+
+def new_connector_key() -> bytes:
+    return new_key()
+
+
+def _aad_ckey_admin(connector_id: str) -> str:
+    return f"{PREFIX}|ckey-admin|{connector_id}"
+
+
+def _aad_ckey_user(user_id: str, connector_id: str) -> str:
+    return f"{PREFIX}|ckey-user|{user_id}|{connector_id}"
+
+
+def _aad_ckey_project(project_id: str, connector_id: str) -> str:
+    return f"{PREFIX}|ckey-project|{project_id}|{connector_id}"
+
+
+def wrap_connector_key_for_admin(ckey: bytes, admin: Credential, connector_id: str) -> str:
+    return seal(admin.wrap_key, ckey, _aad_ckey_admin(connector_id))
+
+
+def unwrap_connector_key_for_admin(blob: str, admin: Credential, connector_id: str) -> bytes:
+    return open_(admin.wrap_key, blob, _aad_ckey_admin(connector_id))
+
+
+def wrap_connector_key_for_account(ckey: bytes, account_key: bytes, user_id: str, connector_id: str) -> str:
+    return seal(hkdf(account_key, b"securitywarden/v1/account-ckey"), ckey, _aad_ckey_user(user_id, connector_id))
+
+
+def unwrap_connector_key_for_account(blob: str, account_key: bytes, user_id: str, connector_id: str) -> bytes:
+    return open_(hkdf(account_key, b"securitywarden/v1/account-ckey"), blob, _aad_ckey_user(user_id, connector_id))
+
+
+def wrap_connector_key_for_project(ckey: bytes, project_key: bytes, project_id: str, connector_id: str) -> str:
+    return seal(hkdf(project_key, b"securitywarden/v1/project-ckey"), ckey, _aad_ckey_project(project_id, connector_id))
+
+
+def unwrap_connector_key_for_project(blob: str, project_key: bytes, project_id: str, connector_id: str) -> bytes:
+    return open_(hkdf(project_key, b"securitywarden/v1/project-ckey"), blob,
+                 _aad_ckey_project(project_id, connector_id))
+
+
+def _aad_connector(connector_id: str, version: int, part: str) -> str:
+    return f"{PREFIX}|connector-{part}|{connector_id}|{version}"
+
+
+def _check_version(version: object) -> int:
+    if not isinstance(version, int) or isinstance(version, bool) or not 1 <= version <= 2**31:
+        raise CryptoError("connector version must be a positive integer")
+    return version
+
+
+def _seal_connector(ckey: bytes, connector_id: str, version: int, part: str, data: dict) -> str:
+    payload = dict(data, version=_check_version(version))
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return seal(hkdf(ckey, f"securitywarden/v1/connector-{part}".encode()), raw,
+                _aad_connector(connector_id, version, part))
+
+
+def _open_connector(ckey: bytes, connector_id: str, version: int, part: str, blob: str) -> dict:
+    raw = open_(hkdf(ckey, f"securitywarden/v1/connector-{part}".encode()), blob,
+                _aad_connector(connector_id, _check_version(version), part))
+    try:
+        data = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise CryptoError(f"connector {part} is not JSON") from None
+    if not isinstance(data, dict) or data.get("version") != version:
+        raise CryptoError(f"connector {part} does not match its version")
+    return data
+
+
+def encrypt_connector(ckey: bytes, connector_id: str, version: int, bundle: dict, meta: dict) -> tuple[str, str]:
+    """(bundle blob, meta blob) for one version. ``bundle`` is the packed connector (code); ``meta`` is the
+    small description the website lists (name, title, tools, activation, size). Both carry the version."""
+    if meta.get("activation") not in CONNECTOR_ACTIVATIONS:
+        raise CryptoError("connector activation must be 'now' or 'restart'")
+    return (_seal_connector(ckey, connector_id, version, "bundle", {"bundle": bundle}),
+            _seal_connector(ckey, connector_id, version, "meta", meta))
+
+
+def decrypt_connector_bundle(ckey: bytes, connector_id: str, version: int, blob: str) -> dict:
+    data = _open_connector(ckey, connector_id, version, "bundle", blob)
+    if not isinstance(data.get("bundle"), dict):
+        raise CryptoError("connector bundle missing")
+    return data["bundle"]
+
+
+def decrypt_connector_meta(ckey: bytes, connector_id: str, version: int, blob: str) -> dict:
+    data = _open_connector(ckey, connector_id, version, "meta", blob)
+    if data.get("activation") not in CONNECTOR_ACTIVATIONS:
+        raise CryptoError("connector activation must be 'now' or 'restart'")
+    return data

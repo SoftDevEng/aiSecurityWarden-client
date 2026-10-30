@@ -226,6 +226,32 @@ class SecurityWardenClient:
             self._action_cfg = cfg
         return self._action_cfg
 
+    # -- machine: connectors stored in SecurityWarden (see DESIGN.md "Connector distribution") --
+
+    def connectors(self) -> dict[str, Any]:
+        """What this token's project uses: {"builtin": [names], "custom": [{"id", "version", "wrapped_key",
+        "meta"}]}. Custom entries are still encrypted; see :meth:`connector_meta` and :meth:`connector_bundle`."""
+        if self.cred.kind != crypto.KIND_MACHINE:
+            raise SecurityWardenError("connectors need a machine token")
+        return self._req("GET", "/v1/connectors").json()
+
+    def _connector_key(self, entry: dict[str, Any]) -> bytes:
+        cfg = self.action_config()
+        return crypto.unwrap_connector_key_for_project(entry["wrapped_key"], cfg["project_key"], cfg["project_id"],
+                                                       entry["id"])
+
+    def connector_meta(self, entry: dict[str, Any]) -> dict[str, Any]:
+        """The decrypted description of one entry from :meth:`connectors` (name, activation, tools, ...)."""
+        return crypto.decrypt_connector_meta(self._connector_key(entry), entry["id"], entry["version"], entry["meta"])
+
+    def connector_bundle(self, entry: dict[str, Any]) -> dict[str, Any]:
+        """Download and decrypt the code of the version named in ``entry``. Raises SecurityWardenError if the
+        server now has another version (call :meth:`connectors` again)."""
+        r = self._req("GET", f"/v1/connectors/{entry['id']}", params={"version": entry["version"]}).json()
+        if r.get("version") != entry["version"]:
+            raise SecurityWardenError("the connector changed meanwhile; try again")
+        return crypto.decrypt_connector_bundle(self._connector_key(entry), entry["id"], entry["version"], r["blob"])
+
     def request_action(self, action: str, args: Any, summary: dict[str, Any], *, risk: str = "high") -> dict[str, Any]:
         """Ask whether this token may perform ``action`` with exactly ``args`` now.
 
@@ -431,6 +457,74 @@ class SecurityWardenClient:
     def revoke_token(self, token_id: str) -> None:
         self._require_admin()
         self._req("DELETE", f"/v1/admin/tokens/{token_id}")
+
+    # -- admin: connectors stored in SecurityWarden (the operator's own; accounts use the website) --
+
+    def list_connectors(self) -> dict[str, Any]:
+        """{"builtin": [...], "custom": [{..., "meta": decrypted}], "limits": {...}}."""
+        self._require_admin()
+        data = self._req("GET", "/v1/admin/connectors").json()
+        for c in data["custom"]:
+            ck = crypto.unwrap_connector_key_for_admin(c["wrapped_key"], self.cred, c["id"])
+            c["meta"] = crypto.decrypt_connector_meta(ck, c["id"], c["version"], c["meta"])
+        return data
+
+    def _admin_ckey(self, cid: str) -> tuple[bytes, dict[str, Any]]:
+        c = next((x for x in self._req("GET", "/v1/admin/connectors").json()["custom"] if x["id"] == cid), None)
+        if c is None:
+            raise SecurityWardenError(f"no connector {cid}")
+        return crypto.unwrap_connector_key_for_admin(c["wrapped_key"], self.cred, cid), c
+
+    def upload_connector(self, bundle: dict[str, Any], *, activation: str = "now",
+                         connector_id: str | None = None) -> dict[str, Any]:
+        """Store a packed connector (``sw-mcp pack``): a new one, or the next version of ``connector_id``.
+        ``activation``: "now" (running agents switch at once) or "restart"."""
+        from ..mcp.bundle import summary, validate_bundle
+        self._require_admin()
+        validate_bundle(bundle)
+        meta = dict(summary(bundle), activation=activation)
+        if connector_id is None:
+            cid, ck = crypto.new_id(), crypto.new_connector_key()
+            blob, mblob = crypto.encrypt_connector(ck, cid, 1, bundle, meta)
+            self._req("POST", "/v1/admin/connectors", json={
+                "id": cid, "blob": blob, "meta": mblob,
+                "wrapped_key": crypto.wrap_connector_key_for_admin(ck, self.cred, cid)})
+            return {"id": cid, "version": 1}
+        ck, cur = self._admin_ckey(connector_id)
+        old = crypto.decrypt_connector_meta(ck, connector_id, cur["version"], cur["meta"])
+        if old.get("name") != bundle["name"]:
+            raise SecurityWardenError(f"connector {connector_id} is {old.get('name')!r}, not {bundle['name']!r}")
+        version = cur["version"] + 1
+        blob, mblob = crypto.encrypt_connector(ck, connector_id, version, bundle, meta)
+        self._req("PUT", f"/v1/admin/connectors/{connector_id}", json={"version": version, "blob": blob, "meta": mblob})
+        return {"id": connector_id, "version": version}
+
+    def download_connector(self, connector_id: str, *, previous: bool = False) -> dict[str, Any]:
+        """The decrypted bundle of the current (or the replaced, backup) version."""
+        ck, _cur = self._admin_ckey(connector_id)
+        r = self._req("GET", f"/v1/admin/connectors/{connector_id}/download",
+                      params={"which": "previous" if previous else "current"}).json()
+        return crypto.decrypt_connector_bundle(ck, connector_id, r["version"], r["blob"])
+
+    def delete_connector(self, connector_id: str) -> None:
+        self._require_admin()
+        self._req("DELETE", f"/v1/admin/connectors/{connector_id}")
+
+    def enable_connector(self, project: str, connector: str, enabled: bool = True) -> None:
+        """Turn a connector on (or off) for a project: a custom connector's id, or a built-in's name."""
+        proj = self._project(project)
+        builtin = not crypto.CONNECTOR_ID_RE.match(connector)
+        path = (f"/v1/admin/projects/{proj['id']}/builtin-connectors/{connector}" if builtin
+                else f"/v1/admin/projects/{proj['id']}/connectors/{connector}")
+        if not enabled:
+            self._req("DELETE", path)
+            return
+        body = None
+        if not builtin:
+            ck, _cur = self._admin_ckey(connector)
+            body = {"wrapped_key": crypto.wrap_connector_key_for_project(ck, self._project_key(proj), proj["id"],
+                                                                         connector)}
+        self._req("PUT", path, json=body)
 
     def audit(self, limit: int = 100) -> list[dict[str, Any]]:
         self._require_admin()

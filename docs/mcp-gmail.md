@@ -60,6 +60,10 @@ mcp_servers:
 
 `SW_ACCESS_TOKEN_FILE` is where the token **will** be kept: the file doesn't need to exist yet.
 
+With a server from 0.6.0.dev5 on, you can leave out `"--connector", "gmail"` (args `["serve"]`) and instead turn
+Gmail on for the project on the website (**Connectors**, check the project under Gmail). Turning it off there
+removes the tools from running agents too.
+
 ### Give it the setup code
 
 Tell the agent: *"Set up SecurityWarden with code SWS1-…"* (paste the whole code from step 2.3). It calls

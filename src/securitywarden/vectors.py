@@ -352,6 +352,34 @@ def build() -> dict[str, Any]:
                       crypto.format_setup_code(ssec)[:-1] + "1", crypto.format_setup_code(ssec) + "A"],
         "must_fail": [{"why": "another code", "secret_hex": other.hex(), "blob": sblob2}],
     }
+    # connectors stored in SecurityWarden
+    ckey, cid, uid = key("connector/key"), crypto.b64e(key("connector/id")[:16]), crypto.b64e(key("user")[:16])
+    acct = key("account-key")
+    bundle = {"format": "sw-connector-1", "name": "notes", "title": "Notes ✓", "entry": "sw_connector_notes.connector:Notes",
+              "files": {"sw_connector_notes/__init__.py": "", "sw_connector_notes/connector.py": "X = 'é'\n"}}
+    from .mcp.bundle import summary
+    meta = dict(summary(bundle), activation="now",
+                tools=[{"name": "notes_delete", "action": "notes.delete", "risk": "high"}])
+    with seeded("connectors"):
+        w_admin = crypto.wrap_connector_key_for_admin(ckey, a, cid)
+        w_user = crypto.wrap_connector_key_for_account(ckey, acct, uid, cid)
+        w_proj = crypto.wrap_connector_key_for_project(ckey, pkey, pid, cid)
+        bblob, mblob = crypto.encrypt_connector(ckey, cid, 3, bundle, meta)
+
+    def nh(b: str) -> str:
+        return crypto.b64d(b[3:])[:12].hex()
+    v["connectors"] = {
+        "key_hex": ckey.hex(), "id": cid, "version": 3, "user_id": uid, "account_key_hex": acct.hex(),
+        "admin_credential": str(a), "project_id": pid, "project_key_hex": pkey.hex(),
+        "wraps": {"admin": {"blob": w_admin, "nonce_hex": nh(w_admin)}, "user": {"blob": w_user, "nonce_hex": nh(w_user)},
+                  "project": {"blob": w_proj, "nonce_hex": nh(w_proj)}},
+        "bundle": bundle, "meta": meta,
+        "bundle_blob": bblob, "bundle_nonce_hex": nh(bblob), "meta_blob": mblob, "meta_nonce_hex": nh(mblob),
+        "must_fail": [{"why": "another version", "part": "bundle", "version": 2, "id": cid, "blob": bblob},
+                      {"why": "meta blob read as bundle", "part": "bundle", "version": 3, "id": cid, "blob": mblob},
+                      {"why": "another connector", "part": "meta", "version": 3,
+                       "id": crypto.b64e(key("connector/other")[:16]), "blob": mblob}],
+    }
     return v
 
 

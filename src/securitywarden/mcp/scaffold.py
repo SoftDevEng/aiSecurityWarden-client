@@ -94,9 +94,11 @@ The guide to writing connectors: `sw-mcp guide` (AGENTS.md says how to use it wi
 
 1. In SecurityWarden: a project with the secrets this connector declares (`secrets = (...)` in connector.py),
    and a token for the agent with the suggested rules (`sw-mcp tools --connector __NAME__` prints them).
-2. Install this package where the agent runs `sw-mcp`: `pip install .`
-3. MCP server settings: command `sw-mcp`, arguments `serve --connector __NAME__`, environment
-   `SW_SERVER_URL` and `SW_ACCESS_TOKEN_FILE`. Give the agent the token's setup code.
+2. Either upload it: `sw-mcp pack __PKG__.connector:__CLASS__` writes `__NAME__.swconnector`; on the website,
+   Connectors > Upload, then turn it on for the project. Or install this package where the agent runs `sw-mcp`
+   (`pip install .`) and add `--connector __NAME__` to the arguments below.
+3. MCP server settings: command `sw-mcp`, arguments `serve`, environment `SW_SERVER_URL` and
+   `SW_ACCESS_TOKEN_FILE`. Give the agent the token's setup code.
 4. Try one tool by hand: `sw-mcp call __NAME___<tool> name=value ...`
 '''
 
@@ -119,7 +121,9 @@ is checked against the user's SecurityWarden rules and, when they say so, approv
 7. Before you say you are done, run and fix until both pass:
        sw-mcp check --connector __NAME__
        pytest
-8. Tell the user: the secrets to add in SecurityWarden, the suggested rules, and how to try it
+8. Make sure it packs: `sw-mcp pack __NAME__` (use only the standard library, httpx and cryptography).
+9. Tell the user: the secrets to add in SecurityWarden, the suggested rules, how to upload it (website,
+   Connectors > Upload the .swconnector file, then turn it on for the project), and how to try it
    (`sw-mcp call __NAME___<tool> ...`).
 '''
 
@@ -146,6 +150,7 @@ API = "https://api.example.com/v1"       # TODO: __TITLE__'s API address
 
 class __CLASS__(Connector):
     name = "__NAME__"
+    title = "__TITLE__"
     description = "TODO: one sentence, e.g. Read and manage __TITLE__ items."
     secrets = ("__UPPER___API_KEY",)
     suggested_rules = ("__NAME__.read.*=allow", "__NAME__.delete=each")

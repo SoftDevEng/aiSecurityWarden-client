@@ -6,6 +6,10 @@
     sw-mcp login gmail                              # one-time Google sign-in for the Gmail connector
     sw-mcp call gmail_search query=is:unread limit=5    # try one tool by hand (waits for approval)
     sw-mcp setup --token-file ~/.config/securitywarden/gmail-token   # store the token from a setup code
+    sw-mcp pack notes                                # pack a connector to upload on the website
+
+Connectors turned on for the token's project on the SecurityWarden website (Connectors) are loaded too, and
+updated while running when uploaded with "go live now" (SW_MCP_REMOTE=0 turns this off).
 
 Config file (JSON; every key optional, environment variables and options win):
     {"server": "https://vault.example.com", "token_file": "~/.config/sw/jarvis.token",
@@ -25,10 +29,12 @@ from .. import __version__
 from ..client.api import SecurityWardenClient, SecurityWardenError, _check_url
 from ..client.cli import _read_cred_file
 from ..client.setup import setup_from_code, token_file_exists
+from .catalog import BUILTIN, load_builtin
+from .bundle import EXTENSION, BundleError, bundle_bytes, pack
 from .framework import Connector, Hub, SetupTarget
+from .remote import RemoteConnectors, default_state_path
 from .server import StdioServer
 
-BUILTIN = {"gmail": "securitywarden.mcp.gmail:Gmail"}
 ENTRY_POINT_GROUP = "securitywarden.connectors"     # pip-installed connectors register themselves here
 
 
@@ -83,12 +89,18 @@ def _config(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _connectors(args: argparse.Namespace, cfg: dict[str, Any]) -> list[type[Connector]]:
+    """Connectors named in the MCP settings. Those turned on for the token's project on the SecurityWarden
+    website are added on top (see remote.py)."""
     refs = args.connector or (os.environ.get("SW_MCP_CONNECTORS", "").split(",") if os.environ.get("SW_MCP_CONNECTORS")
                               else cfg.get("connectors") or [])
     refs = [r.strip() for r in refs if r.strip()]
-    if not refs:
-        _die("no connectors enabled (use --connector gmail, SW_MCP_CONNECTORS or \"connectors\" in the config)")
     return [load_connector(r) for r in dict.fromkeys(refs)]
+
+
+def _source(token_file: str | None) -> RemoteConnectors | None:
+    if os.environ.get("SW_MCP_REMOTE", "1").strip().lower() in ("0", "no", "false", "off"):
+        return None
+    return RemoteConnectors({n: (lambda n=n: load_builtin(n)) for n in BUILTIN}, default_state_path(token_file))
 
 
 def _settings(args: argparse.Namespace, cfg: dict[str, Any]) -> tuple[str | None, str | None, bool | str]:
@@ -136,8 +148,8 @@ def _hub(args: argparse.Namespace, cfg: dict[str, Any]) -> Hub:
             return SecurityWardenClient(url, cred, verify=verify, on_approval=_announce, wait_for_approval=False)
         target = SetupTarget(url, token_file, make, verify)
         client = _client(args, cfg, wait=False) if token_file_exists(token_file) else None
-        return Hub(client, connectors, setup=target)
-    return Hub(_client(args, cfg, wait=False), connectors)
+        return Hub(client, connectors, setup=target, source=_source(token_file))
+    return Hub(_client(args, cfg, wait=False), connectors, source=_source(None))
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
@@ -146,6 +158,10 @@ def cmd_serve(args: argparse.Namespace) -> None:
     if hub.client is None:
         print("sw-mcp: no token yet: the agent can set up with a one-time code (securitywarden_setup), or run "
               "sw-mcp setup", file=sys.stderr, flush=True)
+    hub.refresh(force=True)            # connectors turned on for the token's project on the website
+    if not hub.tools and hub.client is not None:
+        print("sw-mcp: no connectors yet: turn one on for this token's project on the SecurityWarden website "
+              "(Connectors), or name one with --connector", file=sys.stderr, flush=True)
     print(f"sw-mcp {__version__}: serving {', '.join(i.name for i in hub.instances)} "
           f"({len(hub.tools)} tools) on stdio", file=sys.stderr, flush=True)
     StdioServer(hub).serve()
@@ -217,6 +233,22 @@ def cmd_call(args: argparse.Namespace) -> None:
             raise SystemExit(1)
     finally:
         hub.close()
+
+
+def cmd_pack(args: argparse.Namespace) -> None:
+    """Pack a connector into one file to upload on the SecurityWarden website (Connectors)."""
+    cls = load_connector(args.connector_name)
+    try:
+        bundle = pack(cls)
+    except (BundleError, OSError, UnicodeDecodeError) as e:
+        _die(str(e))
+    out = args.output or f"{cls.name}{EXTENSION}"
+    raw = bundle_bytes(bundle)
+    with open(out, "wb") as f:
+        f.write(raw)
+    print(f"wrote {out}: connector {cls.name}, {len(bundle['files'])} files, {len(raw) / 1024:.1f} KB, "
+          f"{len(bundle['tools'])} tools.\nUpload it on the SecurityWarden website: Connectors > Upload, then turn "
+          "it on for the projects whose agents should have it.")
 
 
 def cmd_setup(args: argparse.Namespace) -> None:
@@ -321,6 +353,10 @@ def main(argv: list[str] | None = None) -> None:
     nc.add_argument("--dir", default=".", help="where to create the project folder (default: here)")
     nc.add_argument("--title", help="the application's display name, e.g. Notion")
     nc.set_defaults(fn=cmd_new_connector)
+    pk = sub.add_parser("pack", help="pack a connector into one file to upload on the SecurityWarden website")
+    pk.add_argument("connector_name", help="installed connector name, or package.module:ClassName")
+    pk.add_argument("-o", "--output", help=f"file to write (default: NAME{EXTENSION})")
+    pk.set_defaults(fn=cmd_pack)
     su = sub.add_parser("setup", help="store this machine's token from a one-time setup code")
     common(su)
     su.add_argument("--replace", action="store_true", help="replace a token that is already stored")
