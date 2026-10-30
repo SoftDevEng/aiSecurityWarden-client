@@ -27,6 +27,19 @@ class ApprovalError(SecurityWardenError):
         super().__init__(_APPROVAL_TEXT.get(reason, f"approval failed: {reason}"))
 
 
+class ApprovalPending(SecurityWardenError):
+    """A person has to approve this token's session or fetch first (raised instead of waiting when the
+    client was made with ``wait_for_approval=False``). Call the same method again later to continue."""
+
+    def __init__(self, info: dict[str, Any], kind: str):
+        self.approval_id: str = info["approval_id"]
+        self.match: str | None = info.get("match")
+        self.expires_in: int = int(info.get("expires_in") or 0)
+        self.kind = kind
+        super().__init__(f"waiting for a person to approve this {'session' if kind == 'auth' else 'fetch'} "
+                         f"(match code {self.match})")
+
+
 _APPROVAL_TEXT = {
     "approval_denied": "the approval request was denied",
     "approval_expired": "the approval request expired before anyone approved it",
@@ -55,7 +68,8 @@ def _check_url(url: str) -> str:
 class SecurityWardenClient:
     def __init__(self, server_url: str, credential: str | Credential, *,
                  http: httpx.Client | None = None, timeout: float = 15.0, verify: bool | str = True,
-                 on_approval: ApprovalCallback | None = None, sleep: Callable[[float], None] = time.sleep):
+                 on_approval: ApprovalCallback | None = None, sleep: Callable[[float], None] = time.sleep,
+                 wait_for_approval: bool = True):
         """``on_approval`` is called once when the server asks for a human approval, with
         ``{"approval_id", "match", "expires_in", "kind"}``; show the match code to the operator.
         The client then waits (up to the server's timeout) for the decision."""
@@ -71,17 +85,38 @@ class SecurityWardenClient:
         self.on_approval = on_approval
         self._sleep = sleep
         self._action_cfg: dict[str, Any] | None = None
+        # wait_for_approval=False (agents' tools): raise ApprovalPending at once and resume on the next call
+        self.wait_for_approval = wait_for_approval
+        self._pending_auth: tuple[dict[str, Any], dict[str, Any]] | None = None     # (info, proof)
+        self._pending_fetch: tuple[dict[str, Any], str] | None = None              # (info, nonce)
 
     # -- transport --------------------------------------------------------------
 
     def _authenticate(self) -> None:
+        if self._pending_auth:        # an earlier attempt is waiting for a person: check on it once
+            info, proof = self._pending_auth
+            r = self.http.post(f"{self.base}/v1/auth/approvals/{info['approval_id']}", json=proof)
+            if r.status_code == 202:
+                raise ApprovalPending(info, "auth")
+            self._pending_auth = None
+            if r.status_code == 403 and _detail(r).startswith("approval_"):
+                raise ApprovalError(_detail(r))
+            if r.status_code == 200:
+                return self._take_session(r)
         proof = {"id": self.cred.id, "secret": self.cred.secret, "nonce": crypto.new_nonce()}
         r = self.http.post(f"{self.base}/v1/auth", json=proof)
         if r.status_code == 202:  # a person has to approve this session first
+            if not self.wait_for_approval:
+                self._pending_auth = (r.json(), proof)
+                self._announce(r.json(), "auth")
+                raise ApprovalPending(r.json(), "auth")
             r = self._await_approval(r.json(), "auth",
                                      lambda aid: self.http.post(f"{self.base}/v1/auth/approvals/{aid}", json=proof))
         if r.status_code != 200:
             raise SecurityWardenError(f"authentication failed ({r.status_code}): {_detail(r)}")
+        self._take_session(r)
+
+    def _take_session(self, r: httpx.Response) -> None:
         data = r.json()
         self._token = data["access_token"]
         self._token_exp = time.monotonic() + max(0, int(data.get("expires_in", 60)) - 10)
@@ -107,9 +142,7 @@ class SecurityWardenClient:
                         poll: Callable[[str], httpx.Response]) -> httpx.Response:
         """Wait for a person to decide. Returns the final 200 response or raises ApprovalError."""
         aid = info["approval_id"]
-        if self.on_approval:
-            self.on_approval({"approval_id": aid, "match": info["match"], "expires_in": info["expires_in"],
-                              "kind": kind})
+        self._announce(info, kind)
         deadline = time.monotonic() + float(info["expires_in"]) + 5
         interval = max(0.0, min(float(info.get("poll_interval", 2)), 10.0))
         while True:
@@ -123,14 +156,36 @@ class SecurityWardenClient:
             raise ApprovalError(_detail(r))
         return r
 
+    def _announce(self, info: dict[str, Any], kind: str) -> None:
+        if self.on_approval:
+            self.on_approval({"approval_id": info["approval_id"], "match": info["match"],
+                              "expires_in": info["expires_in"], "kind": kind})
+
     # -- machine ----------------------------------------------------------------
 
     def fetch(self) -> dict[str, str]:
         """Fetch and decrypt every secret visible to this machine token."""
         if self.cred.kind != crypto.KIND_MACHINE:
             raise SecurityWardenError("fetch() needs a machine token")
-        nonce = crypto.new_nonce()
-        r = self._req("GET", "/v1/secrets", headers={"X-SW-Nonce": nonce})
+        r = None
+        if self._pending_fetch:       # an earlier fetch is waiting for a person: check on it once
+            info, nonce = self._pending_fetch
+            r = self._req("POST", f"/v1/secrets/approvals/{info['approval_id']}", json={"nonce": nonce},
+                          accept_403=True)
+            if r.status_code == 202:
+                raise ApprovalPending(info, "fetch")
+            self._pending_fetch = None
+            if r.status_code == 403:
+                raise ApprovalError(_detail(r) if _detail(r).startswith("approval_") else "approval_denied")
+            if r.status_code != 200:
+                r = None              # gone (e.g. the server restarted): ask afresh
+        if r is None:
+            nonce = crypto.new_nonce()
+            r = self._req("GET", "/v1/secrets", headers={"X-SW-Nonce": nonce})
+        if r.status_code == 202 and not self.wait_for_approval:
+            self._pending_fetch = (r.json(), nonce)
+            self._announce(r.json(), "fetch")
+            raise ApprovalPending(r.json(), "fetch")
         if r.status_code == 202:  # this token needs an approval for every fetch
             r = self._await_approval(r.json(), "fetch", lambda aid: self._req(
                 "POST", f"/v1/secrets/approvals/{aid}", json={"nonce": nonce}, accept_403=True))
@@ -349,6 +404,17 @@ class SecurityWardenClient:
         params = {"project_id": self._project(project)["id"]} if project else None
         return self._req("GET", "/v1/admin/tokens", params=params).json()
 
+    def create_setup_code(self, token_id: str, credential: str | Credential, *, expires_in: int = 600) -> str:
+        """A one-time setup code (SWS1-...) for a machine token you just created: the machine runs
+        ``sw-mcp setup`` / ``swctl setup`` with it (or its AI agent calls the setup tool) and gets the token.
+        The token is encrypted here under the code; the server never sees the code or the token."""
+        self._require_admin()
+        secret = crypto.new_setup_secret()
+        sid, blob = crypto.encrypt_for_setup(secret, credential)
+        self._req("POST", f"/v1/admin/tokens/{token_id}/setup-codes",
+                  json={"id": sid, "blob": blob, "expires_in": expires_in})
+        return crypto.format_setup_code(secret)
+
     def revoke_token(self, token_id: str) -> None:
         self._require_admin()
         self._req("DELETE", f"/v1/admin/tokens/{token_id}")
@@ -356,6 +422,37 @@ class SecurityWardenClient:
     def audit(self, limit: int = 100) -> list[dict[str, Any]]:
         self._require_admin()
         return self._req("GET", "/v1/admin/audit", params={"limit": limit}).json()
+
+
+def redeem_setup_code(server_url: str, code: str, *, http: httpx.Client | None = None,
+                      verify: bool | str = True, timeout: float = 30.0) -> Credential:
+    """Collect the machine token behind a one-time setup code. The code works once."""
+    try:
+        secret = crypto.parse_setup_code(code)
+    except CryptoError as e:
+        raise SecurityWardenError(str(e)) from None
+    base = server_url.rstrip("/") if http is not None else _check_url(server_url)
+    own = http is None
+    client = http or httpx.Client(timeout=timeout, verify=verify)
+    try:
+        r = client.post(f"{base}/v1/setup/{crypto.setup_id(secret)}")
+    except httpx.HTTPError as e:
+        raise SecurityWardenError(f"couldn't reach {base} ({type(e).__name__})") from None
+    finally:
+        if own:
+            client.close()
+    if r.status_code == 404:
+        raise SecurityWardenError("that setup code is unknown, already used or expired: make a new one")
+    if r.status_code == 403:
+        raise SecurityWardenError("this machine's address isn't allowed for that token (the code is used up)")
+    if r.status_code == 429:
+        raise SecurityWardenError("too many failed attempts from this address; try again later")
+    if r.status_code != 200:
+        raise SecurityWardenError(f"setup failed ({r.status_code}): {_detail(r)}")
+    try:
+        return crypto.decrypt_from_setup(secret, r.json()["blob"])
+    except (CryptoError, KeyError, ValueError):
+        raise SecurityWardenError("the server's answer didn't decrypt with that code") from None
 
 
 def action_lines(action: str, summary: dict[str, Any] | None) -> str:

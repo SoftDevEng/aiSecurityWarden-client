@@ -336,6 +336,22 @@ def build() -> dict[str, Any]:
              "blob": v["project_key_wraps"]["token"]["blob"]},
         ],
     }
+    # one-time setup codes
+    ssec = key("setup/code")[:crypto.SETUP_LEN]
+    m = cred("m", "machine")
+    with seeded("setup"):
+        sid, sblob2 = crypto.encrypt_for_setup(ssec, m)
+    other = key("setup/other")[:crypto.SETUP_LEN]
+    v["setup"] = {
+        "prefix": crypto.SETUP_PREFIX,
+        "secret_hex": ssec.hex(), "code": crypto.format_setup_code(ssec), "id": sid,
+        "credential": str(m), "blob": sblob2, "nonce_hex": crypto.b64d(sblob2[3:])[:12].hex(),
+        "parse": [{"text": crypto.format_setup_code(ssec).lower().replace("-", " "), "secret_hex": ssec.hex()},
+                  {"text": crypto.format_setup_code(ssec)[5:], "secret_hex": ssec.hex()}],
+        "bad_codes": ["", "SWS1-", "SWR1-" + crypto.format_setup_code(ssec)[5:], crypto.format_setup_code(ssec)[:-1],
+                      crypto.format_setup_code(ssec)[:-1] + "1", crypto.format_setup_code(ssec) + "A"],
+        "must_fail": [{"why": "another code", "secret_hex": other.hex(), "blob": sblob2}],
+    }
     return v
 
 

@@ -51,6 +51,7 @@ admin key ──wrap──▶ project_key ◀──wrap── machine token key 
 | project key for the admin | `sw1\|pkey-admin\|<project_id>` |
 | secret blob | `sw1\|secret\|<project_id>\|<name_mac>` |
 | action summary | `sw1\|action\|<project_id>\|<request_id>` |
+| machine token under a setup code | `sw1\|setup\|<setup_id>` |
 
 The AAD stops a malicious server from substituting ciphertext across projects, tokens
 or secret names. Secret blobs contain `{"n": name, "v": value}`. The client also checks
@@ -367,6 +368,19 @@ not instructions; the random boundary can't be closed from inside the content. L
 names, action names and request ids, never arguments or content. Secrets are fetched with the machine token
 when first needed and kept in memory; they never appear in results or logs.
 
+**No call waits for a person.** `sw-mcp` makes its client with `wait_for_approval=False`: when the token
+itself needs a person's OK (session or every-fetch approval), the client raises `ApprovalPending` instead of
+polling, and the tool answers `waiting_for_approval` with `action` `securitywarden.session` /
+`securitywarden.fetch` at once. `check_approval` with that request id resumes the same call (the client keeps
+the nonce and proof and checks the same approval; it never asks twice). So every tool call returns within
+seconds and the agent's own tool timeout never needs raising.
+
+**First-time setup.** If the configured token file doesn't exist yet, the tools answer "not set up: ask the user
+for a setup code", and the extra tool `securitywarden_setup(code)` is offered. It redeems the code at the
+configured server only (never one the agent names), stores the token (see "Setup codes") and switches the
+tools on. It refuses once a token is in place, so content that tricks the agent into calling it can't swap the
+token. The token never appears in a tool result.
+
 Rules are in SecurityWarden, so a compromised or confused agent can't loosen them; the connector's declared
 risk can only tighten them (high-risk actions always ask). The honest limit stays: whoever controls the
 agent's machine holds the token and the application's credentials.
@@ -388,6 +402,29 @@ credential (`--project`) or shows it once to paste into the website.
 Sending digests the full recipients, subject and body; a reply also the thread and the headers it answers;
 a forward the original message id (Gmail messages don't change). Addresses and subjects are checked
 (no line breaks: no header injection), at most 50 recipients and 100 messages per batch.
+
+## Setup codes
+
+A machine token is long, works until revoked, and has to end up in a file only the machine's user can read.
+A **setup code** carries it there instead: `SWS1-` + 32 base32 characters (160 random bits), made where the token
+is created (website, `swctl admin token create --setup-code`), working once, for 1–60 minutes (10 by default).
+
+- Creating: `setup_id = b64url(HKDF(code_secret, "securitywarden/v1/setup-id", 16 bytes))`; the token string is
+  sealed under `HKDF(code_secret, "securitywarden/v1/setup-key")` with AAD `sw1|setup|<setup_id>`;
+  `POST /v1/{admin,user}/tokens/{id}/setup-codes {id, blob, expires_in}` (owner checked, token active, at most
+  5 open codes per token).
+- Redeeming: `POST /v1/setup/{setup_id}`, no credential: returns `{blob}` once and deletes the row in the same
+  step. Unknown, used and expired codes all answer 404 and count as failures for the address (rate limit);
+  the token's allowed addresses apply. Revoking the token deletes its codes.
+- The client decrypts, checks it is a machine token, and writes it with `store_credential`: a temporary file
+  created mode 600 in a 700 folder (POSIX), or with inherited permissions removed and only the current user
+  granted (Windows, `icacls`), then renamed into place. An existing token is never replaced without
+  `--replace`, and the code isn't used up when that would fail.
+- The server sees neither the code nor the token, only the derived id and the ciphertext. Once used, a code is
+  worthless, so it may sit in a chat with the agent or an email. If setup says a code was already used and
+  nobody here used it, someone else collected the token: revoke it.
+
+Ways to redeem: the agent's `securitywarden_setup` tool, `sw-mcp setup`, `swctl setup`.
 
 ## Web front end
 
@@ -519,6 +556,7 @@ allows the second-factor step, without changing anything else.
 | `sessions` | SHA-256(session token), account, kind (session or recovery ticket), stage, created, last seen, expiry, IP |
 | `approvals` | id, token, kind (`auth`, `fetch`, `action`), client address, SHA-256(nonce), match code, times, status, decided via; for actions also the name, risk, digest, encrypted summary and (only if the project allows) the plaintext summary |
 | `action_windows` | token, action name, until: open "approve similar for N minutes" windows |
+| `setup_codes` | setup id (HKDF of the code, not the code), token, the token encrypted under the code, created, expiry; deleted when used, revoked or expired |
 | `approval_caps` | SHA-256(capability), approval, channel |
 | `approval_messages` | Telegram message id and the prompt text sent, so it can be updated when settled |
 | `secrets` | project, HMAC(name), AES-GCM blob |

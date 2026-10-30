@@ -5,6 +5,7 @@
     sw-mcp tools [--connector gmail]                # what the agent will see, with actions and risks
     sw-mcp login gmail                              # one-time Google sign-in for the Gmail connector
     sw-mcp call gmail_search query=is:unread limit=5    # try one tool by hand (waits for approval)
+    sw-mcp setup --token-file ~/.config/securitywarden/gmail-token   # store the token from a setup code
 
 Config file (JSON; every key optional, environment variables and options win):
     {"server": "https://vault.example.com", "token_file": "~/.config/sw/jarvis.token",
@@ -21,9 +22,10 @@ import sys
 from typing import Any
 
 from .. import __version__
-from ..client.api import SecurityWardenClient, SecurityWardenError
+from ..client.api import SecurityWardenClient, SecurityWardenError, _check_url
 from ..client.cli import _read_cred_file
-from .framework import Connector, Hub
+from ..client.setup import setup_from_code, token_file_exists
+from .framework import Connector, Hub, SetupTarget
 from .server import StdioServer
 
 BUILTIN = {"gmail": "securitywarden.mcp.gmail:Gmail"}
@@ -74,31 +76,59 @@ def _connectors(args: argparse.Namespace, cfg: dict[str, Any]) -> list[type[Conn
     return [load_connector(r) for r in dict.fromkeys(refs)]
 
 
-def _client(args: argparse.Namespace, cfg: dict[str, Any]) -> SecurityWardenClient:
+def _settings(args: argparse.Namespace, cfg: dict[str, Any]) -> tuple[str | None, str | None, bool | str]:
     url = args.server or os.environ.get("SW_SERVER_URL") or cfg.get("server")
+    token_file = args.token_file or os.environ.get("SW_ACCESS_TOKEN_FILE") or cfg.get("token_file")
+    verify = args.ca_bundle or os.environ.get("SW_CA_BUNDLE") or cfg.get("ca_bundle") or True
+    return url, token_file, verify
+
+
+def _announce(info: dict) -> None:
+    print(f"sw-mcp: waiting for a person to approve this {'session' if info['kind'] == 'auth' else 'fetch'} "
+          f"(match code {info['match']}, up to {info['expires_in']} s)...", file=sys.stderr, flush=True)
+
+
+def _client(args: argparse.Namespace, cfg: dict[str, Any], *, wait: bool = True) -> SecurityWardenClient:
+    url, token_file, verify = _settings(args, cfg)
     if not url:
         _die("no server URL (use --server, SW_SERVER_URL or \"server\" in the config)")
-    token_file = args.token_file or os.environ.get("SW_ACCESS_TOKEN_FILE") or cfg.get("token_file")
     if token_file:
         cred = _read_cred_file(token_file)
     elif os.environ.get("SW_ACCESS_TOKEN"):
         cred = os.environ["SW_ACCESS_TOKEN"]
     else:
         _die("no machine token (use --token-file, SW_ACCESS_TOKEN_FILE or \"token_file\" in the config)")
-    verify = args.ca_bundle or os.environ.get("SW_CA_BUNDLE") or cfg.get("ca_bundle") or True
-
-    def announce(info: dict) -> None:
-        print(f"sw-mcp: waiting for a person to approve this {'session' if info['kind'] == 'auth' else 'fetch'} "
-              f"(match code {info['match']}, up to {info['expires_in']} s)...", file=sys.stderr, flush=True)
     try:
-        return SecurityWardenClient(url, cred, verify=verify, on_approval=announce)
+        return SecurityWardenClient(url, cred, verify=verify, on_approval=_announce, wait_for_approval=wait)
     except (SecurityWardenError, ValueError) as e:
         _die(str(e))
 
 
+def _hub(args: argparse.Namespace, cfg: dict[str, Any]) -> Hub:
+    """Tool calls never wait for a person: approvals come back as "waiting_for_approval" at once, so the
+    agent's own tool timeout never matters. With a token file that doesn't exist yet, the tools explain how
+    to set up, and securitywarden_setup takes a one-time code."""
+    url, token_file, verify = _settings(args, cfg)
+    connectors = _connectors(args, cfg)
+    if token_file and not token_file_exists(token_file) and not os.environ.get("SW_ACCESS_TOKEN"):
+        if url:
+            try:
+                _check_url(url)
+            except SecurityWardenError as e:
+                _die(str(e))
+
+        def make(cred: Any) -> SecurityWardenClient:
+            return SecurityWardenClient(url, cred, verify=verify, on_approval=_announce, wait_for_approval=False)
+        return Hub(None, connectors, setup=SetupTarget(url, token_file, make, verify))
+    return Hub(_client(args, cfg, wait=False), connectors)
+
+
 def cmd_serve(args: argparse.Namespace) -> None:
     cfg = _config(args)
-    hub = Hub(_client(args, cfg), _connectors(args, cfg))
+    hub = _hub(args, cfg)
+    if hub.client is None:
+        print("sw-mcp: no token yet: the agent can set up with a one-time code (securitywarden_setup), or run "
+              "sw-mcp setup", file=sys.stderr, flush=True)
     print(f"sw-mcp {__version__}: serving {', '.join(i.name for i in hub.instances)} "
           f"({len(hub.tools)} tools) on stdio", file=sys.stderr, flush=True)
     StdioServer(hub).serve()
@@ -147,7 +177,7 @@ def cmd_call(args: argparse.Namespace) -> None:
     """Run one tool as an agent would, and wait for a person's approval if it needs one."""
     import time
     cfg = _config(args)
-    hub = Hub(_client(args, cfg), _connectors(args, cfg))
+    hub = _hub(args, cfg)
     try:
         res = hub.call(args.tool, _parse_call_args(hub, args.tool, args.values))
         deadline = time.monotonic() + args.wait
@@ -164,6 +194,32 @@ def cmd_call(args: argparse.Namespace) -> None:
             raise SystemExit(1)
     finally:
         hub.close()
+
+
+def cmd_setup(args: argparse.Namespace) -> None:
+    """Store this machine's token from a one-time setup code, then print what to give the agent."""
+    import getpass
+    import shutil
+    cfg = _config(args)
+    url, token_file, verify = _settings(args, cfg)
+    if not url:
+        _die("no server URL (use --server, SW_SERVER_URL or \"server\" in the config)")
+    if not token_file:
+        _die("say where to keep the token: --token-file PATH (or SW_ACCESS_TOKEN_FILE), the same path the MCP "
+             "server's settings use")
+    if token_file_exists(token_file) and not args.replace:
+        _die(f"{os.path.expanduser(token_file)} already holds a token (use --replace to swap it for a new one)")
+    code = sys.stdin.readline() if args.code_stdin else getpass.getpass("Setup code (SWS1-..., not shown): ")
+    try:
+        cred, where = setup_from_code(url, code, token_file, replace=args.replace, verify=verify)
+    except (SecurityWardenError, OSError) as e:
+        _die(str(e))
+    print(f"Token {cred.id} stored in {where} (readable by you only).", file=sys.stderr)
+    exe = shutil.which("sw-mcp") or os.path.abspath(sys.argv[0])
+    conns = args.connector or (cfg.get("connectors") or [])
+    print("\nFor Hermes or Claude: command", exe, "with arguments: serve" +
+          "".join(f" --connector {c}" for c in conns or ["<name>"]), file=sys.stderr)
+    print(f"and environment SW_SERVER_URL={url} SW_ACCESS_TOKEN_FILE={where}", file=sys.stderr)
 
 
 def cmd_login(args: argparse.Namespace) -> None:
@@ -199,6 +255,11 @@ def main(argv: list[str] | None = None) -> None:
     c.add_argument("--wait", type=int, default=900, help="seconds to wait for an approval (default 900)")
     common(c)
     c.set_defaults(fn=cmd_call)
+    su = sub.add_parser("setup", help="store this machine's token from a one-time setup code")
+    common(su)
+    su.add_argument("--replace", action="store_true", help="replace a token that is already stored")
+    su.add_argument("--code-stdin", action="store_true", help="read the code from stdin instead of asking")
+    su.set_defaults(fn=cmd_setup)
     lg = sub.add_parser("login", help="one-time sign-in for a connector (e.g. gmail)")
     lg.add_argument("connector_name")
     common(lg, connectors=False)

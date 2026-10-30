@@ -414,3 +414,67 @@ def pkce_pair() -> tuple[str, str]:
     """(code_verifier, code_challenge) for an OAuth sign-in with PKCE, method S256."""
     verifier = b64e(os.urandom(32))
     return verifier, b64e(hashlib.sha256(verifier.encode("ascii")).digest())
+
+
+# ---------------------------------------------------------------------------
+# one-time setup codes: hand a machine its token without the token itself passing through
+# chats, emails or the AI (see DESIGN.md "Setup codes")
+# ---------------------------------------------------------------------------
+
+SETUP_PREFIX = "SWS1-"
+SETUP_LEN = 20          # 160 bits: 32 base32 characters
+
+
+def new_setup_secret() -> bytes:
+    return os.urandom(SETUP_LEN)
+
+
+def format_setup_code(secret: bytes) -> str:
+    """SWS1-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX (base32, groups of four)."""
+    if len(secret) != SETUP_LEN:
+        raise CryptoError("setup secret must be 20 bytes")
+    bits = int.from_bytes(secret, "big")
+    text = "".join(_B32[(bits >> (155 - i)) & 31] for i in range(0, 160, 5))
+    return SETUP_PREFIX + "-".join(text[i:i + 4] for i in range(0, 32, 4))
+
+
+def parse_setup_code(text: str) -> bytes:
+    """Accepts any case, spaces and dashes. Raises CryptoError."""
+    t = re.sub(r"[\s-]", "", (text or "").upper())
+    if t.startswith(SETUP_PREFIX.rstrip("-")):
+        t = t[len(SETUP_PREFIX) - 1:]
+    if len(t) != 32 or any(c not in _B32 for c in t):
+        raise CryptoError("that isn't a SecurityWarden setup code (SWS1-...)")
+    bits = 0
+    for c in t:
+        bits = (bits << 5) | _B32.index(c)
+    return bits.to_bytes(SETUP_LEN, "big")
+
+
+def setup_id(secret: bytes) -> str:
+    """What the server looks the code up by. It can't be turned back into the code."""
+    return b64e(hkdf(secret, b"securitywarden/v1/setup-id", 16))
+
+
+def _aad_setup(sid: str) -> str:
+    return f"{PREFIX}|setup|{sid}"
+
+
+def encrypt_for_setup(secret: bytes, credential: Credential | str) -> tuple[str, str]:
+    """(setup id, blob): a machine token encrypted under a one-time setup code."""
+    cred = credential if isinstance(credential, Credential) else parse_credential(credential)
+    if cred.kind != KIND_MACHINE:
+        raise CryptoError("setup codes are for machine tokens")
+    sid = setup_id(secret)
+    return sid, seal(hkdf(secret, b"securitywarden/v1/setup-key"), str(cred).encode("utf-8"), _aad_setup(sid))
+
+
+def decrypt_from_setup(secret: bytes, blob: str) -> Credential:
+    sid = setup_id(secret)
+    try:
+        cred = parse_credential(open_(hkdf(secret, b"securitywarden/v1/setup-key"), blob, _aad_setup(sid)).decode("utf-8"))
+    except UnicodeDecodeError:
+        raise CryptoError("setup payload is not a credential") from None
+    if cred.kind != KIND_MACHINE:
+        raise CryptoError("setup payload is not a machine token")
+    return cred

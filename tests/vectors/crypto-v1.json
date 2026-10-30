@@ -1143,5 +1143,39 @@
     "blob": "v1.1hCc6A-EQDoZBSKwydy43Bu5MLEVQpT3evTcucvwTSob2Y2v_lEWG6UDXnYMMVhG-Lksp1bISVUnR1Ch"
    }
   ]
+ },
+ "setup": {
+  "prefix": "SWS1-",
+  "secret_hex": "f1adde9bfcda9a6cd06b9563883b6739b76a58c0",
+  "code": "SWS1-6GW5-5G74-3KNG-ZUDL-SVRY-QO3H-HG3W-UWGA",
+  "id": "emF7UWiPzyJkWlXRUMQobQ",
+  "credential": "sw1.m.l65THvo-te4P0EEkziPYEw.BWQG94XsgzrHZUSilEmGz5y2pLZBqW3IGxyd9c2G6nI:-IdHt0wG4VcCm4AUeac073RIt4l1WTWbHydjR0KYZXk",
+  "blob": "v1.sKyR3hCrHrkGPdOvNA0Pd1SHBkN65cESq1Yrjj_puTV3s-I5fvYhs9jR8HrG-GeT7x3jcu4g3XfTFhrVOChEmnx8D69KsbwArgVMzLE8KueETWubiTZ9gusySzyHXs-DXsWLYpy_dSbS2B_vjTWrC9JVBG7qg9z3k7t1J49YdzHkEbp-E7p-rPn4MPqkiLkq",
+  "nonce_hex": "b0ac91de10ab1eb9063dd3af",
+  "parse": [
+   {
+    "text": "sws1 6gw5 5g74 3kng zudl svry qo3h hg3w uwga",
+    "secret_hex": "f1adde9bfcda9a6cd06b9563883b6739b76a58c0"
+   },
+   {
+    "text": "6GW5-5G74-3KNG-ZUDL-SVRY-QO3H-HG3W-UWGA",
+    "secret_hex": "f1adde9bfcda9a6cd06b9563883b6739b76a58c0"
+   }
+  ],
+  "bad_codes": [
+   "",
+   "SWS1-",
+   "SWR1-6GW5-5G74-3KNG-ZUDL-SVRY-QO3H-HG3W-UWGA",
+   "SWS1-6GW5-5G74-3KNG-ZUDL-SVRY-QO3H-HG3W-UWG",
+   "SWS1-6GW5-5G74-3KNG-ZUDL-SVRY-QO3H-HG3W-UWG1",
+   "SWS1-6GW5-5G74-3KNG-ZUDL-SVRY-QO3H-HG3W-UWGAA"
+  ],
+  "must_fail": [
+   {
+    "why": "another code",
+    "secret_hex": "3f61bbb4d9f6be9fddf279422abfe6a2fe83e646",
+    "blob": "v1.sKyR3hCrHrkGPdOvNA0Pd1SHBkN65cESq1Yrjj_puTV3s-I5fvYhs9jR8HrG-GeT7x3jcu4g3XfTFhrVOChEmnx8D69KsbwArgVMzLE8KueETWubiTZ9gusySzyHXs-DXsWLYpy_dSbS2B_vjTWrC9JVBG7qg9z3k7t1J49YdzHkEbp-E7p-rPn4MPqkiLkq"
+   }
+  ]
  }
 }

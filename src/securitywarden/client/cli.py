@@ -143,6 +143,28 @@ def cmd_run(args: argparse.Namespace) -> int:
 # admin commands
 # ---------------------------------------------------------------------------
 
+def cmd_setup(args: argparse.Namespace) -> int:
+    """Put this machine's token in place from a one-time setup code (made on the website or with
+    ``swctl admin token create --setup-code``)."""
+    from .setup import setup_from_code, token_file_exists
+    path = args.token_file or os.environ.get("SW_ACCESS_TOKEN_FILE") or _default_token_file()
+    if token_file_exists(path) and not args.replace:
+        _die(f"{os.path.expanduser(path)} already holds a token (use --replace to swap it for a new one)")
+    code = sys.stdin.readline() if args.code_stdin else getpass.getpass("Setup code (SWS1-..., not shown): ")
+    try:
+        cred, where = setup_from_code(_server(args), code, path, replace=args.replace, verify=_verify(args))
+    except (SecurityWardenError, OSError) as e:
+        _die(str(e))
+    print(f"Token {cred.id} stored in {where} (readable by you only).", file=sys.stderr)
+    if not (args.token_file or os.environ.get("SW_ACCESS_TOKEN_FILE")):
+        print(f"Point SW_ACCESS_TOKEN_FILE at it, or pass --token-file {where}.", file=sys.stderr)
+    return 0
+
+
+def _default_token_file() -> str:
+    return os.path.join("~", ".config", "securitywarden", "token")
+
+
 def cmd_project(args: argparse.Namespace) -> int:
     c = _admin_client(args)
     if args.action == "create":
@@ -214,10 +236,18 @@ def cmd_token(args: argparse.Namespace) -> int:
     c = _admin_client(args)
     if args.action == "create":
         tok = c.create_token(args.project, args.name, args.expires_days, args.allow_ip, _policy_from_args(args))
-        print(f"Machine token for {args.name} (project {args.project}). Shown ONCE:\n", file=sys.stderr)
-        print(str(tok))
-        print("\nStore it on the machine in a chmod 600 file and point SW_ACCESS_TOKEN_FILE at it.",
-              file=sys.stderr)
+        if args.setup_code:
+            code = c.create_setup_code(tok.id, tok)
+            print(f"Setup code for {args.name} (project {args.project}); works once, for 10 minutes:\n",
+                  file=sys.stderr)
+            print(code)
+            print("\nOn the machine: swctl setup (or sw-mcp setup), or tell its AI agent to set up SecurityWarden "
+                  "with this code.", file=sys.stderr)
+        else:
+            print(f"Machine token for {args.name} (project {args.project}). Shown ONCE:\n", file=sys.stderr)
+            print(str(tok))
+            print("\nOn the machine, swctl setup is easier: create the token with --setup-code instead. Or store "
+                  "it in a file only its user can read and point SW_ACCESS_TOKEN_FILE at it.", file=sys.stderr)
         if args.allow_ip:
             print(f"It only works from: {', '.join(args.allow_ip)}", file=sys.stderr)
         if args.approval not in (None, "none"):
@@ -336,6 +366,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("command", nargs=argparse.REMAINDER)
     r.set_defaults(func=cmd_run)
 
+    st = sub.add_parser("setup", help="store this machine's token from a one-time setup code")
+    st.add_argument("--replace", action="store_true", help="replace a token that is already stored")
+    st.add_argument("--code-stdin", action="store_true", help="read the code from stdin instead of asking")
+    st.set_defaults(func=cmd_setup)
+
     a = sub.add_parser("admin", help="administer projects, secrets and tokens").add_subparsers(
         dest="area", required=True)
 
@@ -359,6 +394,8 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--expires-days", type=float)
     x.add_argument("--allow-ip", action="append", metavar="ADDR",
                    help="address or CIDR range the token may connect from (repeatable; default: any)")
+    x.add_argument("--setup-code", action="store_true",
+                   help="print a one-time setup code for the machine instead of the token itself")
     x = tos.add_parser("set-ips", help="replace the addresses a token may connect from")
     x.add_argument("id")
     x.add_argument("--allow-ip", action="append", metavar="ADDR")
