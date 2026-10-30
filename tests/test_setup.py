@@ -145,6 +145,39 @@ def test_setup_refuses_once_set_up(tmp_path, http, setup_server):
     assert len(setup_server.codes) == 1                                  # the other code wasn't even used
 
 
+def test_revoking_the_token_returns_to_setup(tmp_path, http, setup_server):
+    old = FakeServer({"notes.read.note": "allow"})
+    new = FakeServer({"notes.read.note": "allow"})
+    servers = iter([old, new])
+    made = []
+
+    def make(cred):
+        made.append(str(cred))
+        return next(servers)
+    hub = Hub(None, [Notes], setup=SetupTarget("https://vault.example.com", str(tmp_path / "token"), make, http=http),
+              log=lambda m: None)
+    hub.call("securitywarden_setup", {"code": setup_server.add(crypto.new_credential(crypto.KIND_MACHINE))})
+    assert "Buy milk" in hub.call("notes_read", {"id": "n1"}).text
+    old.revoked = True                                                   # revoked on the website
+    r = hub.call("notes_read", {"id": "n1"})
+    assert r.is_error and "revoked" in r.text and "new one-time setup code" in r.text
+    second = crypto.new_credential(crypto.KIND_MACHINE)
+    ok = hub.call("securitywarden_setup", {"code": setup_server.add(second)})
+    assert not ok.is_error and second.secret not in ok.text
+    assert open(tmp_path / "token").read().strip() == str(second) and made[-1] == str(second)
+    assert "Buy milk" in hub.call("notes_read", {"id": "n1"}).text       # works with the new token
+
+
+def test_a_live_token_is_never_replaced(tmp_path, http, setup_server):
+    hub, made = _hub(tmp_path, http)
+    hub.call("securitywarden_setup", {"code": setup_server.add(crypto.new_credential(crypto.KIND_MACHINE))})
+    before = open(tmp_path / "token").read()
+    hub.client.check_token = lambda: (_ for _ in ()).throw(SecurityWardenError("couldn't reach the server"))
+    r = hub.call("securitywarden_setup", {"code": setup_server.add(crypto.new_credential(crypto.KIND_MACHINE))})
+    assert r.is_error and "Couldn't check" in r.text                    # unreachable is not "revoked"
+    assert open(tmp_path / "token").read() == before and len(setup_server.codes) == 1
+
+
 def test_a_hub_with_a_token_offers_no_setup(tmp_path, http):
     hub = Hub(FakeServer(), [Notes], log=lambda m: None)
     assert "securitywarden_setup" not in [t["name"] for t in hub.list_tools()]

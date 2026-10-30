@@ -67,8 +67,11 @@ Tell the agent: *"Set up SecurityWarden with code SWS1-…"* (paste the whole co
 Or, in a terminal on the machine: `sw-mcp setup --server https://vault.example.com --token-file <same path>` and
 paste the code when asked.
 
-The code works once, so it doesn't matter that it stays in the chat. The setup tool refuses once a token is in
-place, so nothing in an email can make the agent swap it.
+The code works once, so it doesn't matter that it stays in the chat. The setup tool refuses while the stored
+token works, so nothing in an email can make the agent swap it.
+
+**Changing the token:** revoke the old one on the website (the agent then says its token was revoked), create a
+new token, and give the agent the new setup code. No terminal needed.
 
 ### Sign in to Gmail (once, on a computer with a browser)
 

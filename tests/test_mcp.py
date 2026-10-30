@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from securitywarden.client.api import ApprovalError, SecurityWardenError
+from securitywarden.client.api import ApprovalError, SecurityWardenError, TokenRejected
 from securitywarden.crypto import action_digest
 from securitywarden.mcp import Connector, Hub, Plan, Summary, ToolError, tool, untrusted
 from securitywarden.mcp.server import StdioServer
@@ -21,11 +21,22 @@ class FakeServer:
         self.fetches = 0
         self.n = 0
 
+    revoked = False
+
+    def _alive(self):
+        if self.revoked:
+            raise TokenRejected("the token was rejected (invalid credential): revoked, expired or wrong")
+
+    def check_token(self):
+        self._alive()
+
     def fetch(self):
+        self._alive()
         self.fetches += 1
         return {"NOTES_KEY": "k-123"}
 
     def request_action(self, action, args, summary, risk="high"):
+        self._alive()
         rule = self.rules.get(action, "ask")
         if rule == "deny":
             raise ApprovalError("action_denied")

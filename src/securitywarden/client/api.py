@@ -40,6 +40,11 @@ class ApprovalPending(SecurityWardenError):
                          f"(match code {self.match})")
 
 
+class TokenRejected(SecurityWardenError):
+    """The server rejected the credential itself (HTTP 401 on sign-in): revoked, expired, deleted or wrong.
+    Not raised for network trouble, rate limits, address lists or pending approvals."""
+
+
 _APPROVAL_TEXT = {
     "approval_denied": "the approval request was denied",
     "approval_expired": "the approval request expired before anyone approved it",
@@ -113,8 +118,16 @@ class SecurityWardenClient:
             r = self._await_approval(r.json(), "auth",
                                      lambda aid: self.http.post(f"{self.base}/v1/auth/approvals/{aid}", json=proof))
         if r.status_code != 200:
+            if r.status_code == 401:
+                raise TokenRejected(f"the token was rejected ({_detail(r)}): revoked, expired or wrong")
             raise SecurityWardenError(f"authentication failed ({r.status_code}): {_detail(r)}")
         self._take_session(r)
+
+    def check_token(self) -> None:
+        """Sign in afresh. Raises TokenRejected if the server no longer accepts this credential
+        (ApprovalPending if a person must approve the session: the token is alive)."""
+        self._token = None
+        self._authenticate()
 
     def _take_session(self, r: httpx.Response) -> None:
         data = r.json()

@@ -378,8 +378,14 @@ seconds and the agent's own tool timeout never needs raising.
 **First-time setup.** If the configured token file doesn't exist yet, the tools answer "not set up: ask the user
 for a setup code", and the extra tool `securitywarden_setup(code)` is offered. It redeems the code at the
 configured server only (never one the agent names), stores the token (see "Setup codes") and switches the
-tools on. It refuses once a token is in place, so content that tricks the agent into calling it can't swap the
-token. The token never appears in a tool result.
+tools on. The token never appears in a tool result.
+
+**Changing the token = revoking it.** While the stored token works, `securitywarden_setup` refuses, so content
+that tricks the agent into calling it can't swap the token. Once the server rejects the token itself (HTTP 401
+on sign-in: revoked, expired or deleted; the client raises `TokenRejected`), every tool answers "the token was
+revoked: ask the user for a new setup code", and `securitywarden_setup` checks with the server
+(`check_token()`) and then replaces the file. Network errors, rate limits, address lists and pending approvals
+never count as rejected. Only someone signed in to the token's SecurityWarden account can revoke it.
 
 Rules are in SecurityWarden, so a compromised or confused agent can't loosen them; the connector's declared
 risk can only tighten them (high-risk actions always ask). The honest limit stays: whoever controls the

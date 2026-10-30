@@ -106,11 +106,11 @@ def _client(args: argparse.Namespace, cfg: dict[str, Any], *, wait: bool = True)
 
 def _hub(args: argparse.Namespace, cfg: dict[str, Any]) -> Hub:
     """Tool calls never wait for a person: approvals come back as "waiting_for_approval" at once, so the
-    agent's own tool timeout never matters. With a token file that doesn't exist yet, the tools explain how
-    to set up, and securitywarden_setup takes a one-time code."""
+    agent's own tool timeout never matters. With a token file, securitywarden_setup takes a one-time code:
+    the first time, and again once the server rejects the stored token (revoked or expired)."""
     url, token_file, verify = _settings(args, cfg)
     connectors = _connectors(args, cfg)
-    if token_file and not token_file_exists(token_file) and not os.environ.get("SW_ACCESS_TOKEN"):
+    if token_file and not os.environ.get("SW_ACCESS_TOKEN"):
         if url:
             try:
                 _check_url(url)
@@ -119,7 +119,9 @@ def _hub(args: argparse.Namespace, cfg: dict[str, Any]) -> Hub:
 
         def make(cred: Any) -> SecurityWardenClient:
             return SecurityWardenClient(url, cred, verify=verify, on_approval=_announce, wait_for_approval=False)
-        return Hub(None, connectors, setup=SetupTarget(url, token_file, make, verify))
+        target = SetupTarget(url, token_file, make, verify)
+        client = _client(args, cfg, wait=False) if token_file_exists(token_file) else None
+        return Hub(client, connectors, setup=target)
     return Hub(_client(args, cfg, wait=False), connectors)
 
 
