@@ -391,6 +391,12 @@ Rules are in SecurityWarden, so a compromised or confused agent can't loosen the
 risk can only tighten them (high-risk actions always ask). The honest limit stays: whoever controls the
 agent's machine holds the token and the application's credentials.
 
+**Finding connectors.** By name from the entry-point group `securitywarden.connectors` (installed packages
+declare `name = "module:Class"`; Gmail is registered the same way), or directly as `module:Class`. A connector's
+actions must start with its `name`. `sw-mcp check` lints connectors (names, schemas against method signatures, no
+floats, suggested rules); `securitywarden.mcp.testing` gives connector tests a fake SecurityWarden; the guide for
+authors (and their AI) ships as `securitywarden/mcp/CONNECTORS.md` (`sw-mcp guide`).
+
 ### Gmail (`securitywarden.mcp.gmail`)
 
 OAuth only (a Google Cloud "Desktop app" client; scope `gmail.modify`). Secrets: `GMAIL_CLIENT_ID`,

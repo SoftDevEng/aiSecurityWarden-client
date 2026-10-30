@@ -29,6 +29,20 @@ from .framework import Connector, Hub, SetupTarget
 from .server import StdioServer
 
 BUILTIN = {"gmail": "securitywarden.mcp.gmail:Gmail"}
+ENTRY_POINT_GROUP = "securitywarden.connectors"     # pip-installed connectors register themselves here
+
+
+def available_connectors() -> dict[str, str]:
+    """Connector name -> "module:Class": built in, plus every installed package that declares
+    [project.entry-points."securitywarden.connectors"]."""
+    from importlib.metadata import entry_points
+    found = dict(BUILTIN)
+    try:
+        for ep in entry_points(group=ENTRY_POINT_GROUP):
+            found.setdefault(ep.name, ep.value)
+    except Exception:  # noqa: BLE001 - a broken package must not stop sw-mcp
+        pass
+    return found
 
 
 def _die(msg: str, code: int = 1) -> "NoReturn":  # type: ignore[name-defined]
@@ -37,11 +51,12 @@ def _die(msg: str, code: int = 1) -> "NoReturn":  # type: ignore[name-defined]
 
 
 def load_connector(ref: str) -> type[Connector]:
-    """"gmail" or "package.module:ClassName" (a third-party connector)."""
-    target = BUILTIN.get(ref, ref)
+    """A connector by name ("gmail", or any installed connector package's name) or "package.module:ClassName"."""
+    known = available_connectors()
+    target = known.get(ref, ref)
     mod_name, sep, cls_name = target.partition(":")
     if not sep:
-        _die(f"unknown connector {ref!r} (built in: {', '.join(BUILTIN)}; or package.module:ClassName)")
+        _die(f"unknown connector {ref!r} (installed: {', '.join(sorted(known))}; or package.module:ClassName)")
     try:
         cls = getattr(importlib.import_module(mod_name), cls_name)
     except (ImportError, AttributeError) as e:
@@ -138,6 +153,12 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 def cmd_tools(args: argparse.Namespace) -> None:
     cfg = _config(args)
+    if not (args.connector or os.environ.get("SW_MCP_CONNECTORS") or cfg.get("connectors")):
+        print("Installed connectors:")
+        for name, target in sorted(available_connectors().items()):
+            print(f"  {name:<12} {target}")
+        print("Show one: sw-mcp tools --connector NAME")
+        return
     for cls in _connectors(args, cfg):
         print(f"{cls.name}: {cls.description}")
         for spec in cls.tool_specs():
@@ -224,6 +245,39 @@ def cmd_setup(args: argparse.Namespace) -> None:
     print(f"and environment SW_SERVER_URL={url} SW_ACCESS_TOKEN_FILE={where}", file=sys.stderr)
 
 
+def cmd_check(args: argparse.Namespace) -> None:
+    """Check connectors for mistakes before using them (for people and for AI writing connectors)."""
+    from .lint import check_connector
+    refs = args.connector or sorted(available_connectors())
+    errors = 0
+    for ref in refs:
+        cls = load_connector(ref)
+        problems = check_connector(cls)
+        errors += sum(1 for level, _ in problems if level == "error")
+        print(f"{ref}: " + ("OK" if not problems else f"{len(problems)} problem(s)"))
+        for level, msg in problems:
+            print(f"  {level}: {msg}")
+    if errors:
+        raise SystemExit(1)
+
+
+def cmd_guide(args: argparse.Namespace) -> None:
+    """Print the connector guide (Markdown), e.g. to give to an AI that writes a connector."""
+    from importlib.resources import files
+    sys.stdout.write((files("securitywarden.mcp") / "CONNECTORS.md").read_text(encoding="utf-8"))
+
+
+def cmd_new_connector(args: argparse.Namespace) -> None:
+    from .scaffold import create_connector_project
+    try:
+        where = create_connector_project(args.name, args.dir, title=args.title)
+    except (ValueError, FileExistsError) as e:
+        _die(str(e))
+    print(f"Created {where}", file=sys.stderr)
+    print("Next: read AGENTS.md there (or give it to your AI), then:\n"
+          f"  pip install -e {where}\n  sw-mcp check --connector {args.name}\n  pytest {where}", file=sys.stderr)
+
+
 def cmd_login(args: argparse.Namespace) -> None:
     cls = load_connector(args.connector_name)
     login = getattr(cls, "login", None)
@@ -257,6 +311,16 @@ def main(argv: list[str] | None = None) -> None:
     c.add_argument("--wait", type=int, default=900, help="seconds to wait for an approval (default 900)")
     common(c)
     c.set_defaults(fn=cmd_call)
+    ck = sub.add_parser("check", help="check connectors for mistakes (all installed, or --connector NAME)")
+    ck.add_argument("--connector", action="append", help="connector to check (repeat)")
+    ck.set_defaults(fn=cmd_check)
+    gd = sub.add_parser("guide", help="print the guide to writing a connector (give it to your AI)")
+    gd.set_defaults(fn=cmd_guide)
+    nc = sub.add_parser("new-connector", help="create a connector project to fill in")
+    nc.add_argument("name", help="connector name: lowercase, e.g. notion or my_crm (prefixes its actions)")
+    nc.add_argument("--dir", default=".", help="where to create the project folder (default: here)")
+    nc.add_argument("--title", help="the application's display name, e.g. Notion")
+    nc.set_defaults(fn=cmd_new_connector)
     su = sub.add_parser("setup", help="store this machine's token from a one-time setup code")
     common(su)
     su.add_argument("--replace", action="store_true", help="replace a token that is already stored")

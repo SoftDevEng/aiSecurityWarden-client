@@ -32,6 +32,9 @@ dev = ["pytest>=8"]
 swctl = "securitywarden.client.cli:main"
 sw-mcp = "securitywarden.mcp.cli:main"
 
+[project.entry-points."securitywarden.connectors"]
+gmail = "securitywarden.mcp.gmail:Gmail"
+
 [project.gui-scripts]
 swadmin = "securitywarden.client.gui:main"
 

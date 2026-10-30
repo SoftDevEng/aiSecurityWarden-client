@@ -136,6 +136,11 @@ sw-mcp call gmail_search query=is:unread limit=5   # try one tool by hand; waits
 sw-mcp setup --token-file ~/.config/securitywarden/gmail-token   # store the token from a one-time setup code
 ```
 
+Other applications get a **connector**: one Python class whose tools each declare an action and a risk. An AI can
+write one: `sw-mcp new-connector NAME` creates the project (with instructions for the AI in `AGENTS.md`),
+`sw-mcp guide` prints the rules, and `sw-mcp check` plus the generated tests confirm it's right. Installed
+connector packages are found by name (`--connector NAME`). See [docs/connectors.md](docs/connectors.md).
+
 ## Admin commands
 
 | Command | |

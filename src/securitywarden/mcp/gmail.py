@@ -53,6 +53,9 @@ SYSTEM_LABELS = {"INBOX", "UNREAD", "STARRED", "IMPORTANT", "SPAM", "TRASH", "SE
 
 _IDS = {"type": "array", "items": {"type": "string"}, "description": "Gmail message ids (from gmail_search)."}
 _ADDRS = {"type": "array", "items": {"type": "string"}, "description": "Email addresses."}
+_MID = {"type": "string", "description": "A Gmail message id (from gmail_search)."}
+_SUBJECT = {"type": "string", "description": "Subject line (one line)."}
+_BODY = {"type": "string", "description": "Plain-text body."}
 
 
 class Gmail(Connector):
@@ -125,8 +128,10 @@ class Gmail(Connector):
     # -- organizing ------------------------------------------------------------------------
 
     @tool("Add and/or remove labels on emails (label names as shown by gmail_labels).", action="gmail.label",
-          risk="low", params={"message_ids": _IDS, "add": {"type": "array", "items": {"type": "string"}},
-                              "remove": {"type": "array", "items": {"type": "string"}}},
+          risk="low", params={"message_ids": _IDS,
+                              "add": {"type": "array", "items": {"type": "string"}, "description": "Label names to add."},
+                              "remove": {"type": "array", "items": {"type": "string"},
+                                         "description": "Label names to remove."}},
           required=["message_ids"])
     def label(self, message_ids: list[str], add: list[str] | None = None, remove: list[str] | None = None) -> Plan:
         ids = _check_ids(message_ids)
@@ -144,7 +149,8 @@ class Gmail(Connector):
         return Plan({"ids": ids, "add": [], "remove": ["INBOX"]}, self._batch_summary("Archive", ids), self._modify)
 
     @tool("Mark emails as read (or unread with read=false).", action="gmail.mark_read", risk="low",
-          params={"message_ids": _IDS, "read": {"type": "boolean"}}, required=["message_ids"])
+          params={"message_ids": _IDS, "read": {"type": "boolean", "description": "False marks them unread. Default true."}},
+          required=["message_ids"])
     def mark_read(self, message_ids: list[str], read: bool = True) -> Plan:
         ids = _check_ids(message_ids)
         a = {"ids": ids, "add": [] if read else ["UNREAD"], "remove": ["UNREAD"] if read else []}
@@ -168,22 +174,23 @@ class Gmail(Connector):
     # -- writing ---------------------------------------------------------------------------
 
     @tool("Send a new email.", action="gmail.send", risk="high",
-          params={"to": _ADDRS, "subject": {"type": "string"}, "body": {"type": "string", "description": "Plain text."},
-                  "cc": _ADDRS, "bcc": _ADDRS}, required=["to", "subject", "body"])
+          params={"to": _ADDRS, "subject": _SUBJECT, "body": _BODY, "cc": _ADDRS, "bcc": _ADDRS},
+          required=["to", "subject", "body"])
     def send(self, to: list[str], subject: str, body: str, cc: list[str] | None = None,
              bcc: list[str] | None = None) -> Plan:
         a = _mail_args(to, cc or [], bcc or [], subject, body)
         return Plan(a, _mail_summary("Send an email", a), self._send)
 
     @tool("Save a draft in Gmail for the user to review and send themselves.", action="gmail.draft", risk="medium",
-          params={"to": _ADDRS, "subject": {"type": "string"}, "body": {"type": "string"}, "cc": _ADDRS},
+          params={"to": _ADDRS, "subject": _SUBJECT, "body": _BODY, "cc": _ADDRS},
           required=["to", "subject", "body"])
     def draft(self, to: list[str], subject: str, body: str, cc: list[str] | None = None) -> Plan:
         a = _mail_args(to, cc or [], [], subject, body)
         return Plan(a, _mail_summary("Save a draft", a), self._draft)
 
     @tool("Reply to an email (to its sender, or everyone with reply_all).", action="gmail.reply", risk="high",
-          params={"message_id": {"type": "string"}, "body": {"type": "string"}, "reply_all": {"type": "boolean"}},
+          params={"message_id": _MID, "body": _BODY,
+                  "reply_all": {"type": "boolean", "description": "Also reply to everyone in To and Cc. Default false."}},
           required=["message_id", "body"])
     def reply(self, message_id: str, body: str, reply_all: bool = False) -> Plan:
         _check_id(message_id)
@@ -206,7 +213,8 @@ class Gmail(Connector):
 
     @tool("Forward an email (with its attachments) to new recipients, with an optional note.",
           action="gmail.forward", risk="high",
-          params={"message_id": {"type": "string"}, "to": _ADDRS, "note": {"type": "string"}},
+          params={"message_id": _MID, "to": _ADDRS,
+                  "note": {"type": "string", "description": "Optional text above the forwarded email."}},
           required=["message_id", "to"])
     def forward(self, message_id: str, to: list[str], note: str = "") -> Plan:
         _check_id(message_id)
