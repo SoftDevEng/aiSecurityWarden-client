@@ -217,12 +217,47 @@ def _log(msg: str) -> None:
 
 @dataclass
 class SetupTarget:
-    """Where a first-time setup puts the token, and how to make a client from it."""
+    """Where a first-time setup puts the token, and how to make a client from it: a token file of its own
+    (``token_file``), or the entry ``token_name`` in SW_Tokens.json (``store``)."""
     server_url: str | None
-    token_file: str
+    token_file: str | None
     make_client: Callable[[Any], Any]
     verify: bool | str = True
     http: Any = None                    # tests
+    store: Any = None                   # client.tokens.TokenStore
+    token_name: str | None = None
+
+    def has_token(self) -> bool:
+        """Raises SecurityWardenError when SW_Tokens.json holds several tokens and none is named."""
+        if self.store is not None:
+            name = self.store.pick(self.token_name)
+            return name is not None and self.store.entry(name) is not None
+        from ..client.setup import token_file_exists
+        return bool(self.token_file) and token_file_exists(self.token_file)
+
+    def load(self) -> Any:
+        if self.store is not None:
+            name = self.store.pick(self.token_name)
+            self.token_name = name
+            return self.store.credential(name)
+        import os
+        from ..crypto import parse_credential
+        with open(os.path.expanduser(self.token_file), encoding="utf-8") as f:
+            return parse_credential(f.read())
+
+    def install(self, code: str, *, replace: bool) -> Any:
+        from ..client.setup import setup_from_code, setup_into_store
+        if self.store is not None:
+            try:
+                name = self.store.pick(self.token_name)
+            except SecurityWardenError:
+                name = None             # several stored, none named: store under the code's own token name
+            cred, self.token_name = setup_into_store(self.server_url, code, self.store, name, replace=replace,
+                                                     http=self.http, verify=self.verify)
+            return cred
+        cred, _where = setup_from_code(self.server_url, code, self.token_file, replace=replace, http=self.http,
+                                       verify=self.verify)
+        return cred
 
 
 TOKEN_REJECTED = ("SecurityWarden no longer accepts this machine's token (it was revoked or has expired), so nothing "
@@ -261,6 +296,7 @@ class Hub:
         self._refreshed_at: float | None = None
         self.tools_changed = False                # the MCP server tells the agent (notifications/tools/list_changed)
         self._stale: dict[str, str] = {}          # request id -> tool, for actions dropped by a connector update
+        self.policy: dict[str, Any] | None = None  # the token's action rules, when the server sends them
         self.set_connectors(self.static, strict=True)
 
     def set_connectors(self, connectors: Sequence[type[Connector]], *, strict: bool = False) -> bool:
@@ -320,9 +356,29 @@ class Hub:
         except Exception as e:  # noqa: BLE001 - never let this stop the tools that are loaded
             self.log(f"couldn't check SecurityWarden for connector updates ({_short(e)})")
             return
+        before = self.visible_tools()
+        self.policy = getattr(self.source, "policy", None)
         if extra is not None and self.set_connectors(self.static + list(extra)):
             self.tools_changed = True
             self.log(f"connectors now: {', '.join(i.name for i in self.instances) or 'none'} ({len(self.tools)} tools)")
+        if self.visible_tools() != before:
+            self.tools_changed = True
+
+    def visible_tools(self) -> list[str]:
+        """The tools the agent is offered: none whose action the token's rules deny (the server would refuse
+        it anyway, and every listed tool costs the agent's context)."""
+        if not self.policy:
+            return sorted(self.tools)
+        from ..approval import action_decision
+        out = []
+        for full, (_inst, spec) in self.tools.items():
+            try:
+                if action_decision(self.policy, spec.action, spec.risk)[0] == "deny":
+                    continue
+            except ValueError:
+                pass
+            out.append(full)
+        return sorted(out)
 
     def close(self) -> None:
         for inst in self.instances:
@@ -334,7 +390,8 @@ class Hub:
         self.refresh()
         self.tools_changed = False      # the agent is reading the new list right now
         out = []
-        for full, (_inst, spec) in sorted(self.tools.items()):
+        for full in self.visible_tools():
+            _inst, spec = self.tools[full]
             note = (" Needs the user's approval through SecurityWarden unless their rules allow it; if so you get "
                     "status waiting_for_approval and should call check_approval later." if spec.risk != "high"
                     else " Always needs the user's approval through SecurityWarden: you get status "
@@ -375,7 +432,11 @@ class Hub:
         known = name == self.CHECK_TOOL or name in self.tools
         if not known and self.source is None:
             raise KeyError(name)
-        if self.client is None and not self._load_client():
+        try:
+            loaded = self.client is not None or self._load_client()
+        except SecurityWardenError as e:
+            return Result(f"SecurityWarden can't pick this agent's token: {e}.", True)
+        if not loaded:
             return Result(NOT_SET_UP if self.setup else "SecurityWarden has no token configured.", True)
         if not known:                   # maybe a connector turned on in SecurityWarden since the last look
             self.refresh(force=True)
@@ -515,13 +576,9 @@ class Hub:
 
     def _load_client(self) -> bool:
         """A token was put in place meanwhile (e.g. with sw-mcp setup in a terminal): use it."""
-        from ..client.setup import token_file_exists
-        from ..crypto import parse_credential
-        if not self.setup or not token_file_exists(self.setup.token_file):
+        if not self.setup or not self.setup.has_token():
             return False
-        import os
-        with open(os.path.expanduser(self.setup.token_file), encoding="utf-8") as f:
-            self._use(self.setup.make_client(parse_credential(f.read())))
+        self._use(self.setup.make_client(self.setup.load()))
         return True
 
     def _use(self, client: Any) -> None:
@@ -531,13 +588,16 @@ class Hub:
         self._refreshed_at = None       # look for the project's connectors with the new token
 
     def _setup(self, arguments: dict[str, Any]) -> Result:
-        from ..client.setup import setup_from_code, token_file_exists
         code = arguments.get("code")
         if not isinstance(code, str) or set(arguments) != {"code"}:
             return Result("securitywarden_setup takes one argument, code.", True)
         assert self.setup is not None
         replace = False
-        if self.client is not None or token_file_exists(self.setup.token_file):
+        try:
+            has = self.client is not None or self.setup.has_token()
+        except SecurityWardenError:
+            has = False                 # several tokens stored, none named: this sets up the code's own token
+        if has:
             # only a token the server itself rejects may be replaced: revoking it is the user's way back here
             if self.client is None:
                 self._load_client()
@@ -558,8 +618,7 @@ class Hub:
             return Result("No SecurityWarden server is configured (SW_SERVER_URL); the user must add it to the "
                           "MCP server's settings.", True)
         try:
-            cred, _where = setup_from_code(self.setup.server_url, code, self.setup.token_file, replace=replace,
-                                           http=self.setup.http, verify=self.setup.verify)
+            cred = self.setup.install(code, replace=replace)
         except (SecurityWardenError, OSError) as e:
             self.log(f"setup failed: {_short(e)}")
             return Result(f"Setup didn't work: {_short(e)}. Nothing was stored.", True)

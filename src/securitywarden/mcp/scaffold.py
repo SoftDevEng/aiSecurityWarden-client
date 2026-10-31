@@ -95,10 +95,10 @@ The guide to writing connectors: `sw-mcp guide` (AGENTS.md says how to use it wi
 1. In SecurityWarden: a project with the secrets this connector declares (`secrets = (...)` in connector.py),
    and a token for the agent with the suggested rules (`sw-mcp tools --connector __NAME__` prints them).
 2. Either upload it: `sw-mcp pack __PKG__.connector:__CLASS__` writes `__NAME__.swconnector`; on the website,
-   Connectors > Upload, then turn it on for the project. Or install this package where the agent runs `sw-mcp`
+   Connectors > Upload, make it available to the project and tick it for the token. Or install this package where the agent runs `sw-mcp`
    (`pip install .`) and add `--connector __NAME__` to the arguments below.
 3. MCP server settings: command `sw-mcp`, arguments `serve`, environment `SW_SERVER_URL` and
-   `SW_ACCESS_TOKEN_FILE`. Give the agent the token's setup code.
+   `SW_TOKEN_NAME` (the token's name on the website). Give the agent the token's setup code.
 4. Try one tool by hand: `sw-mcp call __NAME___<tool> name=value ...`
 '''
 

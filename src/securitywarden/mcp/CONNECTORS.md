@@ -235,9 +235,10 @@ Or, with no installing on each machine: upload it to SecurityWarden (next sectio
 sw-mcp pack notes                  # writes notes.swconnector (refuses a connector that fails sw-mcp check)
 ```
 
-On the SecurityWarden website: **Connectors > Upload...**, check the tools and risks shown, then turn it on for
-the projects whose agents should have it. Every `sw-mcp` using a token of those projects loads it, with no
-`--connector` needed. Uploading a newer `notes.swconnector` stores the next version (the one it replaces is kept
+On the SecurityWarden website: **Connectors > Upload...**, check the tools and risks shown, make it available to
+the projects that need it, then tick it for each token whose agent should have it. Every `sw-mcp` using such a
+token loads it, with no `--connector` needed. Tools whose actions the token's rules `deny` are left out of the
+list the agent sees. Uploading a newer `notes.swconnector` stores the next version (the one it replaces is kept
 as a backup to download or restore) and asks when running agents switch: **Go live now** (at their next tool
 call) or **On next restart**.
 
@@ -252,11 +253,11 @@ than one they have already run.
 
 ## 14. Using it
 
-1. SecurityWarden website: a project with the connector's secrets; a token for the agent with the suggested
-   rules (token → Manage → Change actions). Turn the connector on for the project under Connectors (or install
-   the package where the agent runs and name it in the MCP settings).
+1. SecurityWarden website: a project with the connector's secrets; make the connector available to the project
+   (Connectors); a token for the agent with the connector ticked and the suggested rules (token → Manage). Or
+   install the package where the agent runs and name it in the MCP settings (`--connector notes`).
 2. The agent's MCP settings: command `sw-mcp`, arguments `serve`, environment `SW_SERVER_URL` and
-   `SW_ACCESS_TOKEN_FILE` (a file that doesn't need to exist yet).
+   `SW_TOKEN_NAME` (the token's name; it's kept in SW_Tokens.json once set up).
 3. Give the agent the token's setup code: "Set up SecurityWarden with code SWS1-...".
 4. Try a tool by hand: `sw-mcp call notes_search query=shopping`.
 

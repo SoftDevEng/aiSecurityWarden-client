@@ -52,24 +52,28 @@ every call answers within seconds, approvals included.
 mcp_servers:
   sw_gmail:
     command: "/home/you/.venvs/sw/bin/sw-mcp"     # Windows: C:\Users\you\...\Scripts\sw-mcp.exe
-    args: ["serve", "--connector", "gmail"]
+    args: ["serve"]
     env:
       SW_SERVER_URL: "https://vault.example.com"
-      SW_ACCESS_TOKEN_FILE: "/home/you/.config/securitywarden/gmail-token"
+      SW_TOKEN_NAME: "jarvis-gmail"                # the token's name on the website
 ```
 
-`SW_ACCESS_TOKEN_FILE` is where the token **will** be kept: the file doesn't need to exist yet.
+The token will be kept in `SW_Tokens.json` (`~/.config/securitywarden/` on Linux, `%APPDATA%\SecurityWarden\` on
+Windows) under that name, next to any other bots' tokens; it doesn't need to exist yet. Every bot's settings look
+like this, apart from the name.
 
-With a server from 0.6.0.dev5 on, you can leave out `"--connector", "gmail"` (args `["serve"]`) and instead turn
-Gmail on for the project on the website (**Connectors**, check the project under Gmail). Turning it off there
-removes the tools from running agents too.
+Gmail comes from the website: under **Connectors**, make Gmail available to the project, and tick **Gmail** for
+the token (when creating it, or under **Manage**). Unticking it there removes the tools from the running agent.
+(Before server 0.6.0.dev6: `args: ["serve", "--connector", "gmail"]` and `SW_ACCESS_TOKEN_FILE` with a path of
+its own, which still works.)
 
 ### Give it the setup code
 
-Tell the agent: *"Set up SecurityWarden with code SWS1-…"* (paste the whole code from step 2.3). It calls
-`securitywarden_setup`, which stores the token at that path, readable only by your user, and the Gmail tools work.
-Or, in a terminal on the machine: `sw-mcp setup --server https://vault.example.com --token-file <same path>` and
-paste the code when asked.
+On the website, **Copy for the agent** and paste it into the chat (*"Set up SecurityWarden with code SWS1-…"*). The
+agent calls `securitywarden_setup`, which stores the token in `SW_Tokens.json` under its name, readable only by
+your user, and the Gmail tools work; the website's dialog closes by itself once the code is used. A code for
+another token is refused without being used up. Or, in a terminal on the machine:
+`sw-mcp setup --server https://vault.example.com --token-name jarvis-gmail` and paste the code when asked.
 
 The code works once, so it doesn't matter that it stays in the chat. The setup tool refuses while the stored
 token works, so nothing in an email can make the agent swap it.

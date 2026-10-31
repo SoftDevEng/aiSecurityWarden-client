@@ -22,13 +22,15 @@ import argparse
 import importlib
 import json
 import os
+import re
 import sys
 from typing import Any
 
 from .. import __version__
 from ..client.api import SecurityWardenClient, SecurityWardenError, _check_url
 from ..client.cli import _read_cred_file
-from ..client.setup import setup_from_code, token_file_exists
+from ..client.setup import setup_from_code, setup_into_store, token_file_exists
+from ..client.tokens import TokenStore
 from .catalog import BUILTIN, load_builtin
 from .bundle import EXTENSION, BundleError, bundle_bytes, pack
 from .framework import Connector, Hub, SetupTarget
@@ -81,8 +83,8 @@ def _config(args: argparse.Namespace) -> dict[str, Any]:
             cfg = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         _die(f"can't read config {path}: {e}")
-    if not isinstance(cfg, dict) or set(cfg) - {"server", "token_file", "ca_bundle", "connectors"}:
-        _die(f"{path}: expected an object with server, token_file, ca_bundle, connectors")
+    if not isinstance(cfg, dict) or set(cfg) - {"server", "token_file", "token_name", "ca_bundle", "connectors"}:
+        _die(f"{path}: expected an object with server, token_name, token_file, ca_bundle, connectors")
     if any(str(v).startswith("sw1.") for v in cfg.values()):
         _die(f"{path}: put the token in its own file (chmod 600) and name that file in token_file")
     return cfg
@@ -97,10 +99,11 @@ def _connectors(args: argparse.Namespace, cfg: dict[str, Any]) -> list[type[Conn
     return [load_connector(r) for r in dict.fromkeys(refs)]
 
 
-def _source(token_file: str | None) -> RemoteConnectors | None:
+def _source(state_path: Any) -> RemoteConnectors | None:
     if os.environ.get("SW_MCP_REMOTE", "1").strip().lower() in ("0", "no", "false", "off"):
         return None
-    return RemoteConnectors({n: (lambda n=n: load_builtin(n)) for n in BUILTIN}, default_state_path(token_file))
+    return RemoteConnectors({n: (lambda n=n: load_builtin(n)) for n in BUILTIN},
+                            state_path() and state_path or default_state_path(None))
 
 
 def _settings(args: argparse.Namespace, cfg: dict[str, Any]) -> tuple[str | None, str | None, bool | str]:
@@ -108,6 +111,17 @@ def _settings(args: argparse.Namespace, cfg: dict[str, Any]) -> tuple[str | None
     token_file = args.token_file or os.environ.get("SW_ACCESS_TOKEN_FILE") or cfg.get("token_file")
     verify = args.ca_bundle or os.environ.get("SW_CA_BUNDLE") or cfg.get("ca_bundle") or True
     return url, token_file, verify
+
+
+def _token_name(args: argparse.Namespace, cfg: dict[str, Any]) -> str | None:
+    return getattr(args, "token_name", None) or os.environ.get("SW_TOKEN_NAME") or cfg.get("token_name") or None
+
+
+def _store_name(store: TokenStore, args: argparse.Namespace, cfg: dict[str, Any]) -> str | None:
+    try:
+        return store.pick(_token_name(args, cfg))
+    except SecurityWardenError as e:
+        _die(str(e))
 
 
 def _announce(info: dict) -> None:
@@ -124,7 +138,15 @@ def _client(args: argparse.Namespace, cfg: dict[str, Any], *, wait: bool = True)
     elif os.environ.get("SW_ACCESS_TOKEN"):
         cred = os.environ["SW_ACCESS_TOKEN"]
     else:
-        _die("no machine token (use --token-file, SW_ACCESS_TOKEN_FILE or \"token_file\" in the config)")
+        store = TokenStore()
+        name = _store_name(store, args, cfg)
+        if not name or store.entry(name) is None:
+            _die(f"no token {'called ' + repr(name) + ' ' if name else ''}in {store.path} yet: run sw-mcp setup "
+                 "with a setup code from the website")
+        try:
+            cred = store.credential(name)
+        except SecurityWardenError as e:
+            _die(str(e))
     try:
         return SecurityWardenClient(url, cred, verify=verify, on_approval=_announce, wait_for_approval=wait)
     except (SecurityWardenError, ValueError) as e:
@@ -133,23 +155,36 @@ def _client(args: argparse.Namespace, cfg: dict[str, Any], *, wait: bool = True)
 
 def _hub(args: argparse.Namespace, cfg: dict[str, Any]) -> Hub:
     """Tool calls never wait for a person: approvals come back as "waiting_for_approval" at once, so the
-    agent's own tool timeout never matters. With a token file, securitywarden_setup takes a one-time code:
-    the first time, and again once the server rejects the stored token (revoked or expired)."""
+    agent's own tool timeout never matters. securitywarden_setup takes a one-time code: the first time, and
+    again once the server rejects the stored token (revoked or expired). The token lives in SW_Tokens.json
+    under its name (SW_TOKEN_NAME), or in a file of its own (SW_ACCESS_TOKEN_FILE, as before)."""
     url, token_file, verify = _settings(args, cfg)
     connectors = _connectors(args, cfg)
-    if token_file and not os.environ.get("SW_ACCESS_TOKEN"):
-        if url:
-            try:
-                _check_url(url)
-            except SecurityWardenError as e:
-                _die(str(e))
+    if os.environ.get("SW_ACCESS_TOKEN") and not token_file:
+        return Hub(_client(args, cfg, wait=False), connectors, source=_source(lambda: None))
+    if url:
+        try:
+            _check_url(url)
+        except SecurityWardenError as e:
+            _die(str(e))
 
-        def make(cred: Any) -> SecurityWardenClient:
-            return SecurityWardenClient(url, cred, verify=verify, on_approval=_announce, wait_for_approval=False)
+    def make(cred: Any) -> SecurityWardenClient:
+        return SecurityWardenClient(url, cred, verify=verify, on_approval=_announce, wait_for_approval=False)
+    if token_file:
         target = SetupTarget(url, token_file, make, verify)
-        client = _client(args, cfg, wait=False) if token_file_exists(token_file) else None
-        return Hub(client, connectors, setup=target, source=_source(token_file))
-    return Hub(_client(args, cfg, wait=False), connectors, source=_source(None))
+        state = (lambda: default_state_path(token_file))
+    else:
+        store = TokenStore()
+        target = SetupTarget(url, None, make, verify, store=store, token_name=_token_name(args, cfg))
+        state = (lambda: os.path.join(os.path.dirname(store.path), "connector-versions",
+                                      re.sub(r"[^A-Za-z0-9._-]", "_", target.token_name or "default") + ".json"))
+    client = None
+    try:
+        if target.has_token():
+            client = make(target.load())
+    except SecurityWardenError as e:
+        print(f"sw-mcp: {e}", file=sys.stderr, flush=True)
+    return Hub(client, connectors, setup=target, source=_source(state))
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
@@ -259,22 +294,28 @@ def cmd_setup(args: argparse.Namespace) -> None:
     url, token_file, verify = _settings(args, cfg)
     if not url:
         _die("no server URL (use --server, SW_SERVER_URL or \"server\" in the config)")
-    if not token_file:
-        _die("say where to keep the token: --token-file PATH (or SW_ACCESS_TOKEN_FILE), the same path the MCP "
-             "server's settings use")
-    if token_file_exists(token_file) and not args.replace:
+    if token_file and token_file_exists(token_file) and not args.replace:
         _die(f"{os.path.expanduser(token_file)} already holds a token (use --replace to swap it for a new one)")
+    name = _token_name(args, cfg)
+    store = TokenStore()
+    if not token_file and name and store.entry(name) is not None and not args.replace:
+        _die(f"{store.path} already holds a token called {name!r} (use --replace to swap it for a new one)")
     code = sys.stdin.readline() if args.code_stdin else getpass.getpass("Setup code (SWS1-..., not shown): ")
     try:
-        cred, where = setup_from_code(url, code, token_file, replace=args.replace, verify=verify)
+        if token_file:
+            cred, where = setup_from_code(url, code, token_file, replace=args.replace, verify=verify)
+        else:
+            cred, name = setup_into_store(url, code, store, name, replace=args.replace, verify=verify)
+            where = store.path
     except (SecurityWardenError, OSError) as e:
         _die(str(e))
-    print(f"Token {cred.id} stored in {where} (readable by you only).", file=sys.stderr)
+    print(f"Token {name or cred.id} stored in {where} (readable by you only).", file=sys.stderr)
     exe = shutil.which("sw-mcp") or os.path.abspath(sys.argv[0])
     conns = args.connector or (cfg.get("connectors") or [])
     print("\nFor Hermes or Claude: command", exe, "with arguments: serve" +
-          "".join(f" --connector {c}" for c in conns or ["<name>"]), file=sys.stderr)
-    print(f"and environment SW_SERVER_URL={url} SW_ACCESS_TOKEN_FILE={where}", file=sys.stderr)
+          "".join(f" --connector {c}" for c in conns), file=sys.stderr)
+    print(f"and environment SW_SERVER_URL={url} " + (f"SW_ACCESS_TOKEN_FILE={where}" if token_file
+                                                     else f"SW_TOKEN_NAME={name}"), file=sys.stderr)
 
 
 def cmd_check(args: argparse.Namespace) -> None:
@@ -326,7 +367,8 @@ def main(argv: list[str] | None = None) -> None:
     def common(sp: argparse.ArgumentParser, connectors: bool = True) -> None:
         sp.add_argument("--config", help="JSON config file (default: $SW_MCP_CONFIG)")
         sp.add_argument("--server", help="server URL (default: $SW_SERVER_URL)")
-        sp.add_argument("--token-file", help="machine token file (default: $SW_ACCESS_TOKEN_FILE)")
+        sp.add_argument("--token-name", help="the token's name in SW_Tokens.json (default: $SW_TOKEN_NAME)")
+        sp.add_argument("--token-file", help="a token file of its own instead (default: $SW_ACCESS_TOKEN_FILE)")
         sp.add_argument("--ca-bundle", help="CA bundle for a private certificate (default: $SW_CA_BUNDLE)")
         if connectors:
             sp.add_argument("--connector", action="append", help="connector to enable (repeat): gmail or module:Class")

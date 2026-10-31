@@ -229,8 +229,8 @@ class SecurityWardenClient:
     # -- machine: connectors stored in SecurityWarden (see DESIGN.md "Connector distribution") --
 
     def connectors(self) -> dict[str, Any]:
-        """What this token's project uses: {"builtin": [names], "custom": [{"id", "version", "wrapped_key",
-        "meta"}]}. Custom entries are still encrypted; see :meth:`connector_meta` and :meth:`connector_bundle`."""
+        """The connectors chosen for this token: {"builtin": [names], "custom": [{"id", "version",
+        "wrapped_key", "meta"}], "actions": the token's action rules}. Custom entries are still encrypted; see :meth:`connector_meta` and :meth:`connector_bundle`."""
         if self.cred.kind != crypto.KIND_MACHINE:
             raise SecurityWardenError("connectors need a machine token")
         return self._req("GET", "/v1/connectors").json()
@@ -506,6 +506,12 @@ class SecurityWardenClient:
                       params={"which": "previous" if previous else "current"}).json()
         return crypto.decrypt_connector_bundle(ck, connector_id, r["version"], r["blob"])
 
+    def set_token_connectors(self, token_id: str, connectors: list[str]) -> list[str]:
+        """The connectors a token's agent gets (custom ids, or built-in names), from those on for its project."""
+        self._require_admin()
+        refs = [c if crypto.CONNECTOR_ID_RE.match(c) else f"builtin:{c}" for c in connectors]
+        return self._req("PUT", f"/v1/admin/tokens/{token_id}/connectors", json={"connectors": refs}).json()["connectors"]
+
     def delete_connector(self, connector_id: str) -> None:
         self._require_admin()
         self._req("DELETE", f"/v1/admin/connectors/{connector_id}")
@@ -534,6 +540,13 @@ class SecurityWardenClient:
 def redeem_setup_code(server_url: str, code: str, *, http: httpx.Client | None = None,
                       verify: bool | str = True, timeout: float = 30.0) -> Credential:
     """Collect the machine token behind a one-time setup code. The code works once."""
+    return redeem_setup_code_info(server_url, code, http=http, verify=verify, timeout=timeout)[0]
+
+
+def redeem_setup_code_info(server_url: str, code: str, *, name: str | None = None, http: httpx.Client | None = None,
+                           verify: bool | str = True, timeout: float = 30.0) -> tuple[Credential, dict[str, Any]]:
+    """(credential, {"name", "project"}) behind a one-time setup code. With ``name``, a code for a token with
+    another name is refused by the server before it is used up."""
     try:
         secret = crypto.parse_setup_code(code)
     except CryptoError as e:
@@ -542,12 +555,16 @@ def redeem_setup_code(server_url: str, code: str, *, http: httpx.Client | None =
     own = http is None
     client = http or httpx.Client(timeout=timeout, verify=verify)
     try:
-        r = client.post(f"{base}/v1/setup/{crypto.setup_id(secret)}")
+        r = client.post(f"{base}/v1/setup/{crypto.setup_id(secret)}", params={"name": name} if name else None)
     except httpx.HTTPError as e:
         raise SecurityWardenError(f"couldn't reach {base} ({type(e).__name__})") from None
     finally:
         if own:
             client.close()
+    if r.status_code == 409 and _detail(r).startswith("setup_code_for_another_token"):
+        other = _detail(r).partition(":")[2].strip()
+        raise SecurityWardenError(f"that setup code is for the token {other!r}, but this program is set up for "
+                                  f"{name!r}; the code still works where {other!r} belongs")
     if r.status_code == 404:
         raise SecurityWardenError("that setup code is unknown, already used or expired: make a new one")
     if r.status_code == 403:
@@ -557,9 +574,16 @@ def redeem_setup_code(server_url: str, code: str, *, http: httpx.Client | None =
     if r.status_code != 200:
         raise SecurityWardenError(f"setup failed ({r.status_code}): {_detail(r)}")
     try:
-        return crypto.decrypt_from_setup(secret, r.json()["blob"])
+        data = r.json()
+        cred = crypto.decrypt_from_setup(secret, data["blob"])
     except (CryptoError, KeyError, ValueError):
         raise SecurityWardenError("the server's answer didn't decrypt with that code") from None
+    info = {"name": data.get("name") if isinstance(data.get("name"), str) else None,
+            "project": data.get("project") if isinstance(data.get("project"), str) else None}
+    if name and info["name"] and info["name"] != name:     # a server that ignored the name check
+        raise SecurityWardenError(f"that setup code was for the token {info['name']!r}, not {name!r}; nothing was "
+                                  "stored (the code is used up: make a new one)")
+    return cred, info
 
 
 def action_lines(action: str, summary: dict[str, Any] | None) -> str:

@@ -69,7 +69,16 @@ def _machine_client(args: argparse.Namespace) -> SecurityWardenClient:
     elif os.environ.get("SW_ACCESS_TOKEN"):
         cred = os.environ["SW_ACCESS_TOKEN"]
     else:
-        _die("no machine token (use --token-file, SW_ACCESS_TOKEN_FILE or SW_ACCESS_TOKEN)")
+        from .tokens import TokenStore
+        store = TokenStore()
+        try:
+            name = store.pick(args.token_name or os.environ.get("SW_TOKEN_NAME"))
+            if not name:
+                _die(f"no machine token: none in {store.path} (swctl setup), and no --token-file, "
+                     "SW_ACCESS_TOKEN_FILE or SW_ACCESS_TOKEN")
+            cred = str(store.credential(name))
+        except SecurityWardenError as e:
+            _die(str(e))
     return SecurityWardenClient(_server(args), cred, verify=_verify(args), on_approval=_announce_approval)
 
 
@@ -145,24 +154,30 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_setup(args: argparse.Namespace) -> int:
     """Put this machine's token in place from a one-time setup code (made on the website or with
-    ``swctl admin token create --setup-code``)."""
-    from .setup import setup_from_code, token_file_exists
-    path = args.token_file or os.environ.get("SW_ACCESS_TOKEN_FILE") or _default_token_file()
-    if token_file_exists(path) and not args.replace:
+    ``swctl admin token create --setup-code``): in SW_Tokens.json under its name, or with --token-file (or
+    SW_ACCESS_TOKEN_FILE) in a file of its own."""
+    from .setup import setup_from_code, setup_into_store, token_file_exists
+    from .tokens import TokenStore
+    path = args.token_file or os.environ.get("SW_ACCESS_TOKEN_FILE")
+    name = args.token_name or os.environ.get("SW_TOKEN_NAME")
+    store = TokenStore()
+    if path and token_file_exists(path) and not args.replace:
         _die(f"{os.path.expanduser(path)} already holds a token (use --replace to swap it for a new one)")
+    if not path and name and store.entry(name) is not None and not args.replace:
+        _die(f"{store.path} already holds a token called {name!r} (use --replace to swap it for a new one)")
     code = sys.stdin.readline() if args.code_stdin else getpass.getpass("Setup code (SWS1-..., not shown): ")
     try:
-        cred, where = setup_from_code(_server(args), code, path, replace=args.replace, verify=_verify(args))
+        if path:
+            cred, where = setup_from_code(_server(args), code, path, replace=args.replace, verify=_verify(args))
+            print(f"Token {cred.id} stored in {where} (readable by you only).", file=sys.stderr)
+        else:
+            cred, name = setup_into_store(_server(args), code, store, name, replace=args.replace, verify=_verify(args))
+            print(f"Token {name!r} stored in {store.path} (readable by you only). Programs use it with "
+                  f"SW_TOKEN_NAME={name} (or alone, while it's the only token there).", file=sys.stderr)
     except (SecurityWardenError, OSError) as e:
         _die(str(e))
-    print(f"Token {cred.id} stored in {where} (readable by you only).", file=sys.stderr)
-    if not (args.token_file or os.environ.get("SW_ACCESS_TOKEN_FILE")):
-        print(f"Point SW_ACCESS_TOKEN_FILE at it, or pass --token-file {where}.", file=sys.stderr)
     return 0
 
-
-def _default_token_file() -> str:
-    return os.path.join("~", ".config", "securitywarden", "token")
 
 
 def cmd_project(args: argparse.Namespace) -> int:
@@ -354,6 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=__version__)
     p.add_argument("--server", help="server URL (default: $SW_SERVER_URL)")
     p.add_argument("--token-file", help="machine token file (default: $SW_ACCESS_TOKEN_FILE)")
+    p.add_argument("--token-name", help="the token's name in SW_Tokens.json (default: $SW_TOKEN_NAME)")
     p.add_argument("--admin-file", help="admin credential file")
     p.add_argument("--ca-bundle", help="custom CA bundle for TLS verification")
     sub = p.add_subparsers(dest="cmd", required=True)
