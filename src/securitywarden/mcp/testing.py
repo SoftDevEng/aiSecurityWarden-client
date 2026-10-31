@@ -38,6 +38,7 @@ class FakeSecurityWarden:
         self._n = 0
         # connectors turned on for the token's project (see publish())
         self.builtin: list[str] = []
+        self.actions: dict[str, Any] | None = None      # the token's action rules as the server sends them
         self.custom: dict[str, dict[str, Any]] = {}
         self._pid, self._pkey = crypto.new_id(), crypto.new_key()
 
@@ -71,7 +72,7 @@ class FakeSecurityWarden:
 
     def connectors(self) -> dict[str, Any]:
         self._alive()
-        return {"builtin": list(self.builtin),
+        return {"actions": self.actions, "builtin": list(self.builtin),
                 "custom": [{"id": cid, "version": c["version"], "wrapped_key": c["wrapped_key"], "meta": c["meta"]}
                            for cid, c in self.custom.items()]}
 

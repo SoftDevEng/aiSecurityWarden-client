@@ -12,9 +12,13 @@ import sys
 import tempfile
 
 import httpx
+from typing import TYPE_CHECKING
 
 from ..crypto import Credential
-from .api import SecurityWardenError, redeem_setup_code
+from .api import SecurityWardenError, redeem_setup_code, redeem_setup_code_info
+
+if TYPE_CHECKING:
+    from .tokens import TokenStore
 
 
 def token_file_exists(path: str) -> bool:
@@ -28,13 +32,20 @@ def store_credential(path: str, cred: Credential, *, replace: bool = False) -> s
     p = os.path.abspath(os.path.expanduser(path))
     if token_file_exists(p) and not replace:
         raise SecurityWardenError(f"{p} already holds a token (revoke it on the website and use --replace)")
+    write_private(p, str(cred) + "\n")
+    return p
+
+
+def write_private(path: str, text: str) -> None:
+    """Replace ``path`` in one step with a file only this user can read."""
+    p = os.path.abspath(os.path.expanduser(path))
     folder = os.path.dirname(p)
     if not os.path.isdir(folder):
         os.makedirs(folder, mode=0o700, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=".sw-token-", dir=folder)      # created with mode 600 on POSIX
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(str(cred) + "\n")
+            f.write(text)
         if os.name == "nt":
             _windows_owner_only(tmp)
         else:
@@ -46,7 +57,6 @@ def store_credential(path: str, cred: Credential, *, replace: bool = False) -> s
         except OSError:
             pass
         raise
-    return p
 
 
 def _windows_owner_only(path: str) -> None:
@@ -72,3 +82,22 @@ def setup_from_code(server_url: str, code: str, token_file: str, *, replace: boo
         raise SecurityWardenError(f"{os.path.expanduser(token_file)} already holds a token")
     cred = redeem_setup_code(server_url, code, http=http, verify=verify)
     return cred, store_credential(token_file, cred, replace=replace)
+
+
+def setup_into_store(server_url: str, code: str, store: "TokenStore", name: str | None = None, *,
+                     replace: bool = False, http: httpx.Client | None = None,
+                     verify: bool | str = True) -> tuple[Credential, str]:
+    """Collect the token behind ``code`` into SW_Tokens.json. With ``name`` (the token this program is set up
+    for), a code for another token is refused before it is used up. Returns (credential, the name stored)."""
+    from .tokens import check_name
+    if name:
+        name = check_name(name)
+        if store.entry(name) is not None and not replace:
+            raise SecurityWardenError(f"{store.path} already holds a token called {name!r}")
+    cred, info = redeem_setup_code_info(server_url, code, name=name, http=http, verify=verify)
+    final = name or info.get("name") or cred.id
+    if not name and store.entry(final) is not None and not replace:
+        raise SecurityWardenError(f"{store.path} already holds a token called {final!r}; the code is used up. "
+                                  "Revoke that token on the website if it's old, make a new code, and try again")
+    store.put(final, cred, server=server_url, project=info.get("project"), replace=replace)
+    return cred, final

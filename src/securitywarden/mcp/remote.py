@@ -35,13 +35,18 @@ def default_state_path(token_file: str | None) -> str:
 
 
 class RemoteConnectors:
-    def __init__(self, builtin: dict[str, Callable[[], type[Connector]]], state_path: str) -> None:
+    def __init__(self, builtin: dict[str, Callable[[], type[Connector]]], state_path: str | Callable[[], str]) -> None:
         self.builtin = builtin                  # name -> loader, for the connectors this client ships
-        self.state_path = state_path
+        self._state_path = state_path
         self.loaded: dict[str, _Loaded] = {}
         self.started = False
+        self.policy: dict[str, Any] | None = None     # the token's action rules (to hide denied tools)
         self._told: set[tuple[str, int, str]] = set()
         self._state: dict[str, int] | None = None
+
+    @property
+    def state_path(self) -> str:
+        return self._state_path() if callable(self._state_path) else self._state_path
 
     # -- highest version seen, per connector (rollback protection) --------------------------------
 
@@ -90,6 +95,7 @@ class RemoteConnectors:
             self._tell(log, "", 0, "old-server", "this SecurityWarden server doesn't offer connectors yet; using only "
                        "the connectors named in the MCP settings")
             return []
+        self.policy = listing.get("actions") if isinstance(listing.get("actions"), dict) else None
         startup = not self.started
         out: list[type[Connector]] = []
         for name in listing.get("builtin") or []:

@@ -420,11 +420,17 @@ a forward the original message id (Gmail messages don't change). Addresses and s
 
 ## Connector distribution
 
-Connectors can be turned on per project on the website instead of being installed on each machine. `sw-mcp`
-then loads whatever the token's project uses, so an agent's MCP settings need no `--connector` at all.
+Connectors are chosen **per token** on the website instead of being installed on each machine: a project makes
+connectors available (and holds their keys, see below), and each of its tokens picks from those; a token with
+none only fetches secrets. `sw-mcp` loads whatever its token has, so an agent's MCP settings need no
+`--connector` at all. Taking a connector away from a project takes it away from the project's tokens too.
+
+**Fewer tools, fewer mistakes.** Every tool's description goes to the model on every turn, so `sw-mcp` doesn't
+offer tools whose action the token's rules `deny` (the server sends the effective rules with the connector list;
+a denied call would be refused anyway). Changing the rules changes the list within one refresh.
 
 **Built-in connectors** (`securitywarden/mcp/catalog.py`: Gmail today) ship with the client. The server lists
-them from the client package it runs with; turning one on for a project stores `builtin:<name>`. Machines whose
+them from the client package it runs with; making one available to a project stores `builtin:<name>`. Machines whose
 client doesn't have that connector yet log "update the SecurityWarden client" and carry on. They never count
 against an account's limits.
 
@@ -452,7 +458,8 @@ account), latest version only.
   `notifications/tools/list_changed`; `restart`: running processes keep the version they have, new ones load
   the new one.
 - *Rollback.* Each machine records the highest version it has loaded of every connector
-  (`<token file>.connectors.json`) and refuses a lower one, also after restarts. The server can still withhold
+  (`connector-versions/<token name>.json` next to SW_Tokens.json, or `<token file>.connectors.json`) and refuses
+  a lower one, also after restarts. The server can still withhold
   an update or a connector (it can always deny service), but can't make a machine run older code or code from
   another connector or account.
 - *Loading.* From memory (a meta-path finder serves the bundle's packages only; nothing is written to disk). A
@@ -473,10 +480,11 @@ is a 404):
 | `PUT {prefix}/connectors/{cid}` | `{version, blob, meta}`: the next version; the current one becomes the backup |
 | `GET {prefix}/connectors/{cid}/download?which=current\|previous` | `{version, blob, meta}` |
 | `DELETE {prefix}/connectors/{cid}` | the connector, its backup and every project's use of it |
-| `PUT/DELETE {prefix}/projects/{pid}/connectors/{cid}` | turn on (`{wrapped_key}`: under the project key) / off |
-| `PUT/DELETE {prefix}/projects/{pid}/builtin-connectors/{name}` | turn a built-in on / off |
-| `GET /v1/connectors` (machine) | `{builtin: [names], custom: [{id, version, meta, wrapped_key}]}` for the token's project |
-| `GET /v1/connectors/{cid}` (machine) | `{id, version, blob}` if turned on for the token's project; audited |
+| `PUT/DELETE {prefix}/projects/{pid}/connectors/{cid}` | make available to a project (`{wrapped_key}`: under the project key) / take away (also from its tokens) |
+| `PUT/DELETE {prefix}/projects/{pid}/builtin-connectors/{name}` | the same for a built-in |
+| `PUT {prefix}/tokens/{tid}/connectors` | `{connectors: [ids and builtin:<name>]}`: the token's choice, from its project's |
+| `GET /v1/connectors` (machine) | `{token, builtin: [names], custom: [{id, version, meta, wrapped_key}], actions}` chosen for the token, with its effective action rules |
+| `GET /v1/connectors/{cid}` (machine) | `{id, version, blob}` if chosen for the token; audited |
 | `GET/PUT /v1/admin/settings/connector-limits`, `PUT /v1/admin/users/{uid}/connector-limits` | the operator's limits |
 
 ## Setup codes
@@ -500,7 +508,38 @@ is created (website, `swctl admin token create --setup-code`), working once, for
   worthless, so it may sit in a chat with the agent or an email. If setup says a code was already used and
   nobody here used it, someone else collected the token: revoke it.
 
-Ways to redeem: the agent's `securitywarden_setup` tool, `sw-mcp setup`, `swctl setup`.
+- `POST /v1/setup/{setup_id}?name=<token name>`: a machine set up for a named token sends its name; a code for a
+  token with another name answers 409 `setup_code_for_another_token: <its name>` and is **not** used up. The
+  answer carries the token's `name` and `project` (names aren't secret).
+- A used code is kept a day, marked used (its ciphertext emptied), so the page that made it can see it was
+  collected: `GET {prefix}/tokens/{tid}/setup-codes/{setup_id}` → `waiting` | `used` (time, address) | `expired`.
+  The website closes its setup dialog when it reads `used`, and says from which address.
+
+Ways to redeem: the agent's `securitywarden_setup` tool, `sw-mcp setup`, `swctl setup`. The website's
+**Copy for the agent** copies *"Set up SecurityWarden with code SWS1-…"*, ready to paste into the chat (never with
+a server address: the agent only uses the server in its own settings).
+
+### SW_Tokens.json (tokens on a machine, by name)
+
+Every machine token on a machine lives in one file only its user can read, keyed by the token's name on the
+website, so every bot's MCP settings look alike except for `SW_TOKEN_NAME`:
+
+    {"format": "sw-tokens-1",
+     "tokens": {"jarvis-gmail": {"token": "sw1.m....", "id": "...", "server": "https://...", "project": "Gmail",
+                                 "saved_at": 1793400000}}}
+
+- Location: `SW_TOKENS_FILE`, else `%APPDATA%\SecurityWarden\SW_Tokens.json` (Windows) or
+  `$XDG_CONFIG_HOME/securitywarden/SW_Tokens.json` (default `~/.config/securitywarden`).
+- Which token: `SW_TOKEN_NAME` (or `--token-name`, or `token_name` in the sw-mcp config); without one, the only
+  token in the file. With several and no name, programs refuse to guess.
+- The server allows one **active** token per name and owner (a revoked token's name is free again), so a name
+  identifies one token. Replacing a revoked token touches only its own entry.
+- Writes take a lock file (`O_EXCL`; a lock older than 30 s is a leftover and taken over) and replace the file in
+  one step, so bots setting up at the same time don't lose each other's entries.
+- `SW_ACCESS_TOKEN_FILE` (a file per token) and `SW_ACCESS_TOKEN` keep working and take precedence.
+- Every process of that user can read every token in the file, as it could read separate files before; one
+  user per machine trust boundary, as before.
+- Connector rollback state: `connector-versions/<token name>.json` in the same folder.
 
 ## Web front end
 
@@ -634,7 +673,8 @@ allows the second-factor step, without changing anything else.
 | `action_windows` | token, action name, until: open "approve similar for N minutes" windows |
 | `connectors` | id, owner, version, the code and its description (both encrypted under the connector's key), the key wrapped for the owner, size, dates, and the replaced version (encrypted) as a backup |
 | `project_connectors` | project, connector id or `builtin:<name>`, the connector key wrapped under the project key |
-| `setup_codes` | setup id (HKDF of the code, not the code), token, the token encrypted under the code, created, expiry; deleted when used, revoked or expired |
+| `setup_codes` | setup id (HKDF of the code, not the code), token, the token encrypted under the code, created, expiry, when and from where it was used (ciphertext emptied then; the row is deleted a day later, or when expired or revoked) |
+| `token_connectors` | token, connector id or `builtin:<name>`: the connectors chosen for the token |
 | `approval_caps` | SHA-256(capability), approval, channel |
 | `approval_messages` | Telegram message id and the prompt text sent, so it can be updated when settled |
 | `secrets` | project, HMAC(name), AES-GCM blob |

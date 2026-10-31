@@ -322,6 +322,8 @@ def test_sw_mcp_call_waits_for_approval(monkeypatch, capsys):
     from securitywarden.mcp import cli
     server = FakeServer({"notes.read.note": "allow"})
     monkeypatch.setattr(cli, "_client", lambda args, cfg, wait=True: server)
+    monkeypatch.setenv("SW_ACCESS_TOKEN", "from-the-environment")      # (not SW_Tokens.json)
+    monkeypatch.setenv("SW_MCP_REMOTE", "0")
     monkeypatch.setattr("time.sleep", lambda s: [server.decide(r, True) for r, v in server.requests.items()
                                                  if v["state"] == "pending"])
     cli.main(["call", "notes_read", "id=n1", "--connector", "test_mcp:Notes"])
