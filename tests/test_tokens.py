@@ -188,3 +188,30 @@ def test_swctl_and_sw_mcp_setup_into_the_shared_file(tmp_path, monkeypatch, caps
     with pytest.raises(SystemExit):
         swmcp.main(["setup", "--server", URL, "--token-name", "jarvis-gmail", "--code-stdin"])
     assert len(setup_server.codes) == 1
+
+
+def test_gmail_login_reads_the_oauth_client_with_a_named_token(tmp_path, monkeypatch):
+    import argparse
+    from securitywarden.mcp import cli as swmcp
+    from securitywarden.mcp import gmail
+    for k in ("SW_ACCESS_TOKEN_FILE", "SW_ACCESS_TOKEN", "SW_MCP_CONFIG", "SW_TOKEN_NAME"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SW_TOKENS_FILE", str(tmp_path / FILE_NAME))
+    monkeypatch.setenv("SW_SERVER_URL", URL)
+    asked = []
+    monkeypatch.setattr("builtins.input", lambda *a: asked.append(1) or "typed-id")
+    monkeypatch.setattr("getpass.getpass", lambda *a: "typed-secret")
+
+    class Fetch:
+        def fetch(self):
+            return {"GMAIL_CLIENT_ID": "cid", "GMAIL_CLIENT_SECRET": "cs"}
+    used = []
+    monkeypatch.setattr(swmcp, "_client", lambda args, cfg, wait=True: used.append(1) or Fetch())
+    args = argparse.Namespace(config=None, server=None, token_file=None, token_name=None, ca_bundle=None)
+    assert gmail._oauth_client(args) == ("typed-id", "typed-secret") and not used    # no token yet: asks
+    TokenStore().put("keith-gmail", m())
+    assert gmail._oauth_client(args) == ("cid", "cs") and used and len(asked) == 1  # the only token
+    TokenStore().put("other", m())
+    assert gmail._oauth_client(args) == ("typed-id", "typed-secret")               # several, none named: asks
+    monkeypatch.setenv("SW_TOKEN_NAME", "keith-gmail")
+    assert gmail._oauth_client(args) == ("cid", "cs")
