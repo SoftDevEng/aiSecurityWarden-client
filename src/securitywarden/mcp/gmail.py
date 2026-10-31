@@ -537,11 +537,24 @@ def _json(r: httpx.Response) -> dict[str, Any]:
     return v if isinstance(v, dict) else {}
 
 
+def _has_token(args: Any) -> bool:
+    """Whether this machine has a SecurityWarden token to read the OAuth client from: a token file, the
+    environment, or SW_Tokens.json (the named token, or the only one there)."""
+    if getattr(args, "token_file", None) or os.environ.get("SW_ACCESS_TOKEN_FILE") or os.environ.get("SW_ACCESS_TOKEN"):
+        return True
+    from ..client.tokens import TokenStore
+    try:
+        store = TokenStore()
+        name = store.pick(getattr(args, "token_name", None) or os.environ.get("SW_TOKEN_NAME"))
+        return name is not None and store.entry(name) is not None
+    except Exception:  # noqa: BLE001 - e.g. several tokens and none named: ask instead
+        return False
+
+
 def _oauth_client(args: Any) -> tuple[str, str]:
     """The OAuth client id and secret: from the bot's SecurityWarden project if a token is set up, else asked."""
     from .cli import _client, _config
-    if any(getattr(args, k, None) for k in ("token_file",)) or os.environ.get("SW_ACCESS_TOKEN_FILE") or \
-            os.environ.get("SW_ACCESS_TOKEN"):
+    if _has_token(args):
         try:
             s = _client(args, _config(args)).fetch()
             if s.get("GMAIL_CLIENT_ID") and s.get("GMAIL_CLIENT_SECRET"):
