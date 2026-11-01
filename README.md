@@ -98,10 +98,10 @@ mkdir -p ~/.config/securitywarden
 echo 'sw1.a....' > ~/.config/securitywarden/admin.cred && chmod 600 ~/.config/securitywarden/admin.cred
 export SW_SERVER_URL=https://vault.example.com
 
-swctl admin project create hermes-webull
-swctl admin secret set hermes-webull WEBULL_APP_KEY       # prompts; value never in argv/history
-swctl admin secret set hermes-webull WEBULL_APP_SECRET
-swctl admin token create hermes-webull --name jarvis --expires-days 180
+swctl admin project create hermes-gmail
+swctl admin secret set hermes-gmail GMAIL_CLIENT_ID       # prompts; value never in argv/history
+swctl admin secret set hermes-gmail GMAIL_CLIENT_SECRET
+swctl admin token create hermes-gmail --name jarvis --expires-days 180
 ```
 
 ### 2. Machine

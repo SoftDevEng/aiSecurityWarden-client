@@ -272,7 +272,7 @@ Honest limit: it protects against the agent, not against someone who controls th
 ### Actions
 
 An action has a **name** (`<app>.<verb>[.<more>]`, lowercase letters, digits and `_`, 2 to 6 parts:
-`gmail.send`, `gmail.read.search`, `webull.order.place`), a **risk** declared by the connector (`low`,
+`gmail.send`, `gmail.read.search`, `calendar.event.create`), a **risk** declared by the connector (`low`,
 `medium`, `high`), a **summary** for the person deciding, and a **digest** of exactly what will be done:
 
     digest = SHA-256( "sw1|action-digest|" ‖ canonical JSON {"action": name, "args": args} )
@@ -688,7 +688,7 @@ Project names, token labels and account emails are plaintext metadata. Pick name
 - One admin credential per database. Admin key rotation (re-wrap all project keys) is planned.
 - The rate limiter is per process. Behind several workers, use one worker or a front-end limiter.
 - No secret versioning or history yet.
-- MCP connectors: Gmail first; the Webull trading server is next on the framework. Plans waiting for approval
+- MCP connectors: Gmail first; more connectors follow on the same framework. Plans waiting for approval
   live in the MCP server's memory only.
 - Possible future additions: a native Hermes secret-source plugin (`ctx.register_secret_source()`),
   multi-user accounts for the web front end, and Postgres support.

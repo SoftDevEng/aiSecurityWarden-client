@@ -6,9 +6,9 @@ Machine use (e.g. as a Hermes Agent command helper)::
 
 Admin use::
 
-    swctl admin project create hermes-webull
-    swctl admin secret set hermes-webull WEBULL_APP_KEY        # prompts, value never in argv
-    swctl admin token create hermes-webull --name jarvis --expires-days 180
+    swctl admin project create hermes-gmail
+    swctl admin secret set hermes-gmail GMAIL_CLIENT_ID        # prompts, value never in argv
+    swctl admin token create hermes-gmail --name jarvis --expires-days 180
     swctl admin token set-approval <token-id> --approval session --session-ttl 8h --channel admin_ui
     swctl admin token set-actions <token-id> --rule 'gmail.read.*=allow' --rule 'gmail.label=window:30m' \
           --rule 'gmail.send=each' --channel admin_ui --channel push:telegram

@@ -8,10 +8,10 @@ that.
 ## 1. Create a project, secrets and a token (admin workstation)
 
 ```bash
-swctl admin project create hermes-webull
-swctl admin secret set hermes-webull WEBULL_APP_KEY
-swctl admin secret set hermes-webull WEBULL_APP_SECRET
-swctl admin token create hermes-webull --name jarvis-webull-scanner --expires-days 180 \
+swctl admin project create hermes-bot
+swctl admin secret set hermes-bot EXAMPLE_API_KEY
+swctl admin secret set hermes-bot EXAMPLE_API_SECRET
+swctl admin token create hermes-bot --name jarvis-bot --expires-days 180 \
       --allow-ip 192.0.2.12        # the agent box; the token is refused from anywhere else
 ```
 
@@ -40,13 +40,16 @@ secrets:
     override_existing: true      # let SecurityWarden be the rotation authority over .env
 
 mcp_servers:
-  webull:
-    command: /home/<you>/.venvs/webull/bin/python
-    args: ["/home/<you>/.hermes/mcp/webull_mcp.py"]
+  example:
+    command: /home/<you>/.venvs/example/bin/python
+    args: ["/home/<you>/.hermes/mcp/example_mcp.py"]
     env:
-      WEBULL_APP_KEY: "${WEBULL_APP_KEY}"
-      WEBULL_APP_SECRET: "${WEBULL_APP_SECRET}"
+      EXAMPLE_API_KEY: "${EXAMPLE_API_KEY}"
+      EXAMPLE_API_SECRET: "${EXAMPLE_API_SECRET}"
 ```
+
+For Gmail, use `sw-mcp` instead: it fetches its own secrets and asks for approval before each action
+([docs/mcp-gmail.md](../../docs/mcp-gmail.md)).
 
 Hermes strips managed credentials from terminal and `execute_code` sandboxes, so the
 agent itself can't print them. Only the MCP server you pass them to receives them.
@@ -65,7 +68,7 @@ pending. With `session` mode the helper is approved once per start; every restar
 ## Rotating and revoking
 
 ```bash
-swctl admin secret set hermes-webull WEBULL_APP_KEY      # new value; picked up on next Hermes restart
+swctl admin secret set hermes-bot EXAMPLE_API_KEY       # new value; picked up on next Hermes restart
 swctl admin token revoke <token-id>                      # jarvis loses access immediately
 swctl admin audit                                        # see every fetch, with IP
 ```
