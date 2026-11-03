@@ -585,3 +585,129 @@ def decrypt_connector_meta(ckey: bytes, connector_id: str, version: int, blob: s
     if data.get("activation") not in CONNECTOR_ACTIVATIONS:
         raise CryptoError("connector activation must be 'now' or 'restart'")
     return data
+
+
+# ---------------------------------------------------------------------------
+# second factor: authenticator-app codes (TOTP, RFC 6238) and recovery codes
+# ---------------------------------------------------------------------------
+#
+# Used by the server to check sign-ins (accounts and the admin credential). It protects signing in, not the
+# encryption: the server has to know each TOTP key to check codes, so it keeps them sealed under its own
+# at-rest key (seal_at_rest), never end-to-end encrypted. Parameters are the ones every authenticator app
+# supports (Microsoft Authenticator, Google Authenticator, Authy, 1Password, Bitwarden...): SHA-1, 6 digits,
+# 30-second steps. SHA-1 is safe here: TOTP only relies on HMAC-SHA1, not on SHA-1 collision resistance.
+
+TOTP_ISSUER = "aiSecurityWarden"
+TOTP_DIGITS = 6
+TOTP_PERIOD = 30
+TOTP_KEY_LEN = 20                 # 160 bits, what RFC 4226 recommends
+TOTP_WINDOW = 1                   # accept one step either side for clock drift
+RECOVERY_CODE_COUNT = 10
+_RECOVERY_LEN = 10                # base32 characters: 50 bits each (plus rate limits and single use)
+_CODE_RE = re.compile(r"^[0-9]{6}$")
+
+
+def new_totp_key() -> bytes:
+    return os.urandom(TOTP_KEY_LEN)
+
+
+def totp_key_text(key: bytes) -> str:
+    """The key as people type it into an authenticator app: RFC 4648 base32, no padding, groups of four."""
+    t = base64.b32encode(key).decode("ascii").rstrip("=")
+    return " ".join(t[i:i + 4] for i in range(0, len(t), 4))
+
+
+def totp_uri(key: bytes, account: str, issuer: str = TOTP_ISSUER) -> str:
+    """otpauth:// URI for the QR code (Key URI Format, as read by every common authenticator app)."""
+    from urllib.parse import quote
+    secret = base64.b32encode(key).decode("ascii").rstrip("=")
+    label = quote(f"{issuer}:{account}", safe="@:")
+    return (f"otpauth://totp/{label}?secret={secret}&issuer={quote(issuer, safe='')}"
+            f"&algorithm=SHA1&digits={TOTP_DIGITS}&period={TOTP_PERIOD}")
+
+
+def _totp(key: bytes):
+    from cryptography.hazmat.primitives.twofactor.totp import TOTP
+    return TOTP(key, TOTP_DIGITS, hashes.SHA1(), TOTP_PERIOD, enforce_key_length=False)
+
+
+def totp_step(at: float) -> int:
+    return int(at) // TOTP_PERIOD
+
+
+def totp_code(key: bytes, at: float) -> str:
+    """The code an authenticator app shows at time ``at`` (tests, and the operator's own tools)."""
+    return _totp(key).generate(int(at)).decode("ascii")
+
+
+def normalize_totp_code(text: str) -> str | None:
+    """'123 456' / '123-456' -> '123456'; None if it isn't six digits."""
+    t = re.sub(r"[\s-]", "", text or "")
+    return t if _CODE_RE.match(t) else None
+
+
+def totp_check(key: bytes, code: str, at: float, after_step: int = -1) -> int | None:
+    """The time step ``code`` belongs to (within TOTP_WINDOW of ``at``), or None. Steps at or before
+    ``after_step`` are refused, so a code can't be used twice: store the returned step and pass it next time."""
+    c = normalize_totp_code(code)
+    if c is None:
+        return None
+    t = _totp(key)
+    now_step = totp_step(at)
+    found = None
+    for step in range(now_step - TOTP_WINDOW, now_step + TOTP_WINDOW + 1):
+        # compare every candidate (no early exit), constant time
+        if hmac.compare_digest(t.generate(step * TOTP_PERIOD), c.encode("ascii")) and step > after_step:
+            found = step
+    return found
+
+
+def new_recovery_codes(n: int = RECOVERY_CODE_COUNT) -> list[str]:
+    """Single-use backup codes for a lost phone, e.g. 'k7m2q-x9p4t'. Shown once; the server keeps only
+    recovery_code_hash() of each."""
+    out = []
+    for _ in range(n):
+        t = "".join(_B32[_secrets.randbelow(32)] for _ in range(_RECOVERY_LEN)).lower()
+        out.append(f"{t[:5]}-{t[5:]}")
+    return out
+
+
+def normalize_recovery_code(text: str) -> str | None:
+    t = re.sub(r"[\s-]", "", (text or "")).upper()
+    if len(t) != _RECOVERY_LEN or any(c not in _B32 for c in t):
+        return None
+    return t
+
+
+def recovery_code_hash(at_rest_key: bytes, code: str) -> str:
+    """Keyed hash of a recovery code (HMAC under the server's at-rest key), so a copy of the database alone
+    can't be used to test guesses. Raises CryptoError for text that isn't a recovery code."""
+    c = normalize_recovery_code(code)
+    if c is None:
+        raise CryptoError("not a recovery code")
+    k = hkdf(at_rest_key, b"securitywarden/v1/recovery-code")
+    return hmac.new(k, b"sw1|recovery-code|" + c.encode("ascii"), hashlib.sha256).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# server-side secrets at rest (e.g. TOTP keys)
+# ---------------------------------------------------------------------------
+#
+# Things the server must be able to read itself are sealed under its own at-rest key, which is kept outside
+# the database (SW_SERVER_KEY or a key file). A copy of the database without that key reveals none of them.
+
+def new_at_rest_key() -> bytes:
+    return os.urandom(KEY_LEN)
+
+
+def _aad_at_rest(context: str) -> str:
+    return f"{PREFIX}|at-rest|{context}"
+
+
+def seal_at_rest(at_rest_key: bytes, plaintext: bytes, context: str) -> str:
+    """``context`` names what and whose it is (e.g. 'totp|user|<id>'), so blobs can't be swapped."""
+    return seal(hkdf(at_rest_key, b"securitywarden/v1/at-rest"), plaintext, _aad_at_rest(context))
+
+
+def open_at_rest(at_rest_key: bytes, blob: str, context: str) -> bytes:
+    return open_(hkdf(at_rest_key, b"securitywarden/v1/at-rest"), blob, _aad_at_rest(context))

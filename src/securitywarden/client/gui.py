@@ -7,7 +7,10 @@ from ``swctl``.
 
 The admin credential and secret values are typed or pasted into the window. They are
 held in memory only: never written to disk, argv, the environment or shell history.
-The only thing remembered between runs is the server URL.
+The only thing remembered between runs is the server URL. When the server requires a
+second factor for the admin credential (the default), the window asks for the code from
+the authenticator app (and sets the app up the first time); the 2FA session it starts is
+kept in memory too and ended on sign-out.
 """
 
 from __future__ import annotations
@@ -143,7 +146,8 @@ class AdminApp:
 
     def __init__(self, root: "tk.Tk", connect: Callable[[str, str], SecurityWardenClient] | None = None):
         self.root = root
-        self.connect = connect or (lambda url, cred: SecurityWardenClient(url, cred))
+        self.connect = connect or (lambda url, cred: SecurityWardenClient(url, cred,
+                                                                          second_factor=TkSecondFactor(self)))
         self.client: SecurityWardenClient | None = None
         self.server = ""
         self.projects: list[dict[str, Any]] = []
@@ -266,9 +270,31 @@ class AdminApp:
         if self._poll_job:
             self.root.after_cancel(self._poll_job)
             self._poll_job = None
+        if self.client:
+            self.client.sign_out()     # ends the 2FA session on the server too
         self.client, self.projects, self.tokens, self.approvals = None, [], [], []
         self._touch()
         self.show_login()
+
+    def _on_two_factor(self) -> None:
+        assert self.client
+        ok, st = self._call(self.client.second_factor_status)
+        if not ok:
+            return
+        if not st["enabled"]:
+            messagebox.showinfo("Two-factor sign-in", "Two-factor sign-in is off for this admin credential "
+                                "(the server doesn't require it).", parent=self.root)
+            return
+        if not messagebox.askyesno("Two-factor sign-in",
+                                   f"Two-factor sign-in is on. Recovery codes left: {st['recovery_codes_left']}.\n\n"
+                                   "Make new recovery codes? The old ones stop working.", parent=self.root):
+            return
+        code = simpledialog.askstring("New recovery codes", "Current code from your authenticator app:", parent=self.root)
+        if not code:
+            return
+        ok, codes = self._call(lambda: self.client.new_recovery_codes(code.strip()))
+        if ok:
+            TkSecondFactor(self).recovery_codes(codes)
 
     # -- main page --------------------------------------------------------------------
 
@@ -278,6 +304,7 @@ class AdminApp:
         top.pack(fill="x")
         ttk.Label(top, text=f"Signed in to {self.server}").pack(side="left")
         ttk.Button(top, text="Sign out", command=self.disconnect).pack(side="right")
+        ttk.Button(top, text="Two-factor…", command=self._on_two_factor).pack(side="right", padx=(0, PAD))
         ttk.Button(top, text="Refresh", command=self.refresh).pack(side="right", padx=(0, PAD))
 
         panes = ttk.Panedwindow(self.body, orient="horizontal")
@@ -859,13 +886,71 @@ class ApprovalDialog(_Dialog):
             self.win.destroy()
 
 
+class TkSecondFactor:
+    """Asks for the admin credential's second factor in dialogs (see SecurityWardenClient's second_factor)."""
+
+    def __init__(self, app: AdminApp):
+        self.app = app
+
+    def code(self, retry: bool) -> str:
+        prompt = ("That code was wrong or already used. Enter the next code:" if retry else
+                  "Code from your authenticator app (or a recovery code):")
+        code = simpledialog.askstring("Two-factor sign-in", prompt, parent=self.app.root)
+        if not code:
+            raise SecurityWardenError("Sign-in cancelled: the admin credential needs a code from your authenticator app.")
+        return code.strip()
+
+    def setup(self, key_text: str, uri: str, retry: bool) -> str:
+        d = SetupSecondFactorDialog(self.app, key_text, uri, retry)
+        self.app.root.wait_window(d.win)
+        if not d.code:
+            raise SecurityWardenError("Sign-in cancelled: two-factor sign-in has to be set up for the admin credential.")
+        return d.code
+
+    def recovery_codes(self, codes: list[str]) -> None:
+        d = ShowOnceDialog(self.app, "Recovery codes",
+                           "Two-factor sign-in is on. Save these single-use recovery codes somewhere safe (a password "
+                           "manager). Each one signs in once if you lose your phone. They won't be shown again.",
+                           "\n".join(codes), height=len(codes))
+        self.app.root.wait_window(d.win)
+
+
+class SetupSecondFactorDialog(_Dialog):
+    def __init__(self, app: AdminApp, key_text: str, uri: str, retry: bool):
+        super().__init__(app, "Set up two-factor sign-in")
+        self.code: str | None = None
+        ttk.Label(self.frame, wraplength=460, justify="left", text=(
+            "This admin credential needs two-factor sign-in. In your authenticator app (Microsoft Authenticator: "
+            "+ > Other account > Enter code manually), add an account with this key:")).pack(anchor="w")
+        key = tk.Text(self.frame, width=48, height=1, font=("Courier", 12))
+        key.insert("1.0", key_text)
+        key.config(state="disabled")
+        key.pack(anchor="w", pady=(6, 6))
+        ttk.Label(self.frame, wraplength=460, justify="left", foreground="#666",
+                  text="Or set it up from the website, which shows a QR code to scan.").pack(anchor="w")
+        if retry:
+            ttk.Label(self.frame, text="That code didn't match. Check the key and try the next code.",
+                      foreground="#b00020").pack(anchor="w", pady=(8, 0))
+        ttk.Label(self.frame, text="Code the app shows now").pack(anchor="w", pady=(12, 0))
+        self.var = tk.StringVar()
+        entry = ttk.Entry(self.frame, textvariable=self.var, width=12)
+        entry.pack(anchor="w")
+        entry.bind("<Return>", lambda _e: self._ok())
+        self._buttons("Turn on", self._ok)
+        self._modal(entry)
+
+    def _ok(self) -> None:
+        self.code = self.var.get().strip() or None
+        self.win.destroy()
+
+
 class ShowOnceDialog(_Dialog):
     """Shows a token or secret value with a Copy button; nothing is kept after it closes."""
 
-    def __init__(self, app: AdminApp, title: str, note: str, value: str):
+    def __init__(self, app: AdminApp, title: str, note: str, value: str, height: int = 3):
         super().__init__(app, title)
         ttk.Label(self.frame, text=note, wraplength=460, justify="left").pack(anchor="w", pady=(0, 8))
-        box = tk.Text(self.frame, width=64, height=3, wrap="char")
+        box = tk.Text(self.frame, width=64, height=height, wrap="char")
         box.insert("1.0", value)
         box.config(state="disabled")
         box.pack(fill="x")

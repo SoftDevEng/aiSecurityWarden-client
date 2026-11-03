@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
 import httpx
@@ -57,6 +57,32 @@ _APPROVAL_TEXT = {
 
 ApprovalCallback = Callable[[dict[str, Any]], None]
 
+# Server answers (403 details) when the admin credential needs its second factor.
+SECOND_FACTOR_REQUIRED = "second_factor_required"     # send a code (or a recovery code)
+SECOND_FACTOR_SETUP = "second_factor_setup"           # set up an authenticator app first
+CODE_ATTEMPTS = 3
+
+
+class SecondFactor(Protocol):
+    """How a client asks the person at the keyboard for their second factor (admin credential only).
+    swctl prompts in the terminal, swadmin opens dialogs, tests compute codes."""
+
+    def code(self, retry: bool) -> str:
+        """The 6-digit code from the authenticator app, or a recovery code. ``retry``: the last one was wrong."""
+        ...
+
+    def setup(self, key_text: str, uri: str, retry: bool) -> str:
+        """Show the new key (``key_text`` to type in, ``uri`` for a QR code) and return the first code."""
+        ...
+
+    def recovery_codes(self, codes: list[str]) -> None:
+        """Show the new single-use recovery codes once, to be saved somewhere safe."""
+        ...
+
+
+class SecondFactorRequired(SecurityWardenError):
+    """The admin credential needs a code from an authenticator app and this client has no way to ask."""
+
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
@@ -74,8 +100,13 @@ class SecurityWardenClient:
     def __init__(self, server_url: str, credential: str | Credential, *,
                  http: httpx.Client | None = None, timeout: float = 15.0, verify: bool | str = True,
                  on_approval: ApprovalCallback | None = None, sleep: Callable[[float], None] = time.sleep,
-                 wait_for_approval: bool = True):
-        """``on_approval`` is called once when the server asks for a human approval, with
+                 wait_for_approval: bool = True, second_factor: SecondFactor | None = None,
+                 mfa_session: str | None = None):
+        """``second_factor`` asks for the authenticator code when an admin credential signs in (the server
+        requires it unless its operator turned it off); one code starts a 2FA session that later sign-ins reuse
+        until it ends (idle or maximum age), so the person isn't asked every few minutes.
+
+        ``on_approval`` is called once when the server asks for a human approval, with
         ``{"approval_id", "match", "expires_in", "kind"}``; show the match code to the operator.
         The client then waits (up to the server's timeout) for the decision."""
         self.cred = credential if isinstance(credential, Credential) else crypto.parse_credential(credential)
@@ -94,6 +125,8 @@ class SecurityWardenClient:
         self.wait_for_approval = wait_for_approval
         self._pending_auth: tuple[dict[str, Any], dict[str, Any]] | None = None     # (info, proof)
         self._pending_fetch: tuple[dict[str, Any], str] | None = None              # (info, nonce)
+        self.second_factor = second_factor
+        self._mfa_session: str | None = mfa_session
 
     # -- transport --------------------------------------------------------------
 
@@ -109,7 +142,12 @@ class SecurityWardenClient:
             if r.status_code == 200:
                 return self._take_session(r)
         proof = {"id": self.cred.id, "secret": self.cred.secret, "nonce": crypto.new_nonce()}
+        if self._mfa_session:
+            proof["mfa_session"] = self._mfa_session
         r = self.http.post(f"{self.base}/v1/auth", json=proof)
+        if r.status_code == 403 and _detail(r) in (SECOND_FACTOR_REQUIRED, SECOND_FACTOR_SETUP):
+            self._mfa_session = None
+            r = self._second_factor(_detail(r), proof)
         if r.status_code == 202:  # a person has to approve this session first
             if not self.wait_for_approval:
                 self._pending_auth = (r.json(), proof)
@@ -122,6 +160,55 @@ class SecurityWardenClient:
                 raise TokenRejected(f"authentication failed (401): {_detail(r)} (the token was revoked, expired or is wrong)")
             raise SecurityWardenError(f"authentication failed ({r.status_code}): {_detail(r)}")
         self._take_session(r)
+
+    def _second_factor(self, need: str, proof: dict[str, Any]) -> httpx.Response:
+        """Ask for the code (or set up the app) and sign in with it. Returns the sign-in response."""
+        sf = self.second_factor
+        if sf is None:
+            raise SecondFactorRequired(
+                "this admin credential needs a code from your authenticator app; sign in with swctl or swadmin"
+                if need == SECOND_FACTOR_REQUIRED else
+                "this admin credential needs two-factor sign-in set up first; sign in with swctl, swadmin or the website")
+        base = {"id": proof["id"], "secret": proof["secret"]}
+        if need == SECOND_FACTOR_SETUP:
+            r = self.http.post(f"{self.base}/v1/auth/2fa/setup", json=base)
+            if r.status_code != 200:
+                raise SecurityWardenError(f"two-factor setup failed ({r.status_code}): {_detail(r)}")
+            info = r.json()
+            for attempt in range(CODE_ATTEMPTS):
+                code = sf.setup(info["key"], info["uri"], attempt > 0)
+                r = self.http.post(f"{self.base}/v1/auth/2fa/confirm", json={**base, "code": code})
+                if r.status_code != 401:
+                    break
+            if r.status_code != 200:
+                raise SecurityWardenError(f"two-factor setup failed ({r.status_code}): {_detail(r)}")
+            sf.recovery_codes(r.json()["recovery_codes"])
+        else:
+            for attempt in range(CODE_ATTEMPTS):
+                r = self.http.post(f"{self.base}/v1/auth", json={**proof, "code": sf.code(attempt > 0)})
+                if r.status_code != 401 or _detail(r) != "wrong code":
+                    break
+            if r.status_code == 401 and _detail(r) == "wrong code":
+                raise SecurityWardenError("sign-in failed: the code was wrong")
+        if r.status_code == 200:
+            self._mfa_session = r.json().get("mfa_session") or None
+        return r
+
+    @property
+    def mfa_session(self) -> str | None:
+        """The current 2FA session token (admin credential), e.g. for swctl to reuse in its next run.
+        Useless without the credential itself."""
+        return self._mfa_session
+
+    def sign_out(self) -> None:
+        """End the 2FA session (if any) on the server and forget the access token."""
+        if self._mfa_session:
+            try:
+                self.http.post(f"{self.base}/v1/auth/2fa/signout", json={"mfa_session": self._mfa_session})
+            except httpx.HTTPError:
+                pass
+        self._mfa_session = None
+        self._token = None
 
     def check_token(self) -> None:
         """Sign in afresh. Raises TokenRejected if the server no longer accepts this credential
@@ -532,6 +619,18 @@ class SecurityWardenClient:
                                                                          connector)}
         self._req("PUT", path, json=body)
 
+    # -- admin: the operator's own second factor --------------------------------------
+
+    def second_factor_status(self) -> dict[str, Any]:
+        """{"enabled", "required", "recovery_codes_left"} for this admin credential."""
+        self._require_admin()
+        return self._req("GET", "/v1/admin/2fa").json()
+
+    def new_recovery_codes(self, code: str) -> list[str]:
+        """Replace the recovery codes (the old ones stop working). Needs a current authenticator code."""
+        self._require_admin()
+        return self._req("POST", "/v1/admin/2fa/recovery-codes", json={"code": code}).json()["recovery_codes"]
+
     def audit(self, limit: int = 100) -> list[dict[str, Any]]:
         self._require_admin()
         return self._req("GET", "/v1/admin/audit", params={"limit": limit}).json()
@@ -628,4 +727,5 @@ def _detail(r: httpx.Response) -> str:
         return r.text[:200]
 
 
-__all__ = ["SecurityWardenClient", "SecurityWardenError", "ApprovalError", "CryptoError"]
+__all__ = ["SecurityWardenClient", "SecurityWardenError", "ApprovalError", "CryptoError", "SecondFactor",
+           "SecondFactorRequired"]

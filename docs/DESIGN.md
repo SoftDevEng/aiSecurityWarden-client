@@ -647,8 +647,8 @@ password changes take effect immediately. Sessions end after 15 minutes without 
 no CSRF surface; the browser keeps the token and the account key in memory only, so reloading the page
 signs out (the keys can't survive a reload without being stored, which they never are).
 
-Each session has a `stage`. Today a successful sign-in is `full`. A second factor will add a stage that only
-allows the second-factor step, without changing anything else.
+Each session has a `stage`: `full` after a complete sign-in, or `code` / `setup` while the second factor
+is still to come ([Second factor](#second-factor-2fa)). Only `full` sessions reach the account's data.
 
 ### What each side can reach
 
@@ -661,14 +661,78 @@ allows the second-factor step, without changing anything else.
 - Accounts' tokens can be approved on the website (`admin_ui`), and through Telegram or ntfy set up in the
   project's Approval setup tab when the operator allows it ([Per-project approval setup](#per-project-approval-setup)).
 
+## Second factor (2FA)
+
+Codes from an authenticator app (TOTP, RFC 6238: HMAC-SHA1, 6 digits, 30-second steps), so any common app
+works: Microsoft Authenticator, Google Authenticator, Authy, 1Password, Bitwarden. Plus 10 single-use
+**recovery codes** (`xxxxx-xxxxx`, 50 bits each) for a lost phone.
+
+**What it protects, and what it doesn't.** 2FA protects *signing in*: someone with a stolen password (or a
+stolen admin credential) can't sign in without the phone. It doesn't change the encryption. The server has to
+know each TOTP key to check codes, so TOTP keys are **not** end-to-end encrypted: they are sealed under the
+server's **at-rest key** (`seal_at_rest`, AES-256-GCM, AAD `sw1|at-rest|totp|user|<id>` or
+`totp|cred|<id>`), which is kept outside the database (`SW_SERVER_KEY`, base64url 32 bytes, or the key file
+next to the database, `<db>.key`, created on first use, owner-only). A copy of the database without that key
+reveals no TOTP key. Recovery codes are stored only as HMAC-SHA256 under a key derived from the at-rest key,
+so a database copy alone can't be used to test guesses either. Losing the at-rest key locks out everyone who
+uses 2FA until they're reset (by the operator, or `securitywarden-server reset-2fa` for the operator itself),
+so back it up, separately from the database.
+
+**Checking a code.** Within one step either side of the server's clock; a step at or before the last one used
+is refused, so a code can't be used twice (per account / credential). Wrong codes count toward the same
+sign-in rate limit as wrong passwords. A recovery code works once, then it's gone.
+
+### Accounts (optional, or required by the operator)
+
+1. `POST /v1/account/signin` with the password proof. Without 2FA: as before (`full` session, wrapped
+   account key). With 2FA on: `{"second_factor": "code", "session"}`, a `code`-stage session (5 minutes) and
+   **no** wrapped account key. When the operator requires 2FA and the account hasn't set it up:
+   `{"second_factor": "setup", "session"}` (a `setup`-stage session, 15 minutes).
+2. `POST /v1/account/signin/code {code}` (code-stage session): a TOTP code or a recovery code. The session
+   becomes `full` and the answer is what step 1 returns without 2FA (wrapped account key included).
+3. Setting up: `POST /v1/account/2fa/setup` → `{key, uri}` (a new key, pending until confirmed; the browser
+   shows `uri` as a QR code and `key` to type in). `POST /v1/account/2fa/confirm {code}` turns it on and
+   returns the recovery codes once; other sessions end. From a `setup`-stage session it also completes the
+   sign-in (same answer as step 2). Replacing the app on an account with 2FA on needs a current code in
+   `setup`.
+4. `POST /v1/account/2fa/disable {auth_key, code}` (password proof and a code; refused while the operator
+   requires 2FA). `POST /v1/account/2fa/recovery-codes {code}` replaces the recovery codes.
+5. Operator: `PUT /v1/admin/settings/security {"require_2fa"}` (turning it on ends the sessions of accounts
+   without 2FA); `POST /v1/admin/users/<id>/2fa/reset` turns an account's 2FA off and ends its sessions.
+
+The account recovery key (new password) does not bypass 2FA.
+
+### The admin credential (required by default)
+
+The operator's admin credential needs a code unless the server runs with `SW_OPERATOR_2FA=0`.
+
+1. `POST /v1/auth {id, secret, nonce, code?, mfa_session?}`. Without a code or a live 2FA session: `403
+   second_factor_required`, or `403 second_factor_setup` if no app is set up yet. With a valid code (TOTP or
+   recovery): `200` with the JWT plus `mfa_session` (`swm1.<random>`; the server keeps its SHA-256), a 2FA
+   session that ends after 15 minutes idle and 12 hours in any case (the account session limits). Later
+   `/v1/auth` calls send `mfa_session` instead of a code, so the 5-minute JWTs renew without asking again.
+   A wrong code: `401 wrong code`.
+2. Admin JWTs carry the 2FA session (`mfs`); every request checks it is still live (invariant 4), so ending
+   it ends access at once.
+3. First sign-in: `POST /v1/auth/2fa/setup {id, secret}` → `{key, uri}`; `POST /v1/auth/2fa/confirm {id,
+   secret, code}` → the JWT, `mfa_session` and the recovery codes (once). Refused once 2FA is on.
+4. `POST /v1/auth/2fa/signout {mfa_session}` ends it. `GET /v1/admin/2fa`, `POST /v1/admin/2fa/recovery-codes
+   {code}`.
+5. Locked out (lost phone and recovery codes): `securitywarden-server reset-2fa` on the server itself.
+
+Clients: `SecurityWardenClient(..., second_factor=...)` asks the person (swctl: terminal prompts, and the
+2FA session cached next to the admin credential file, owner-only; swadmin: dialogs, memory only). Machine
+tokens are unaffected: they have human approval instead.
+
 ## What the server stores
 
 | Table | Contents |
 |---|---|
 | `projects` | id, owner (account id, or empty for the operator), name, project key wrapped under the owner's key, the project's Telegram/ntfy settings (readable by the server, like the server-wide ones), whether action summaries stay encrypted |
-| `credentials` | id, kind, label, Argon2id(secret), project, owner, token-wrapped project key, expiry, revoked, last used/IP, allowed client addresses, approval policy, action policy, approval-limit reset time |
-| `users` | id, email, status, KDF parameters, salt, Argon2id(sign-in key), Argon2id(recovery proof), account key wrapped under the password-derived key and under the recovery key, dates, last sign-in IP, push allowed, own connector limits |
+| `credentials` | id, kind, label, Argon2id(secret), project, owner, token-wrapped project key, expiry, revoked, last used/IP, allowed client addresses, approval policy, action policy, approval-limit reset time; admin credential: 2FA (TOTP key sealed at rest, last step used, keyed hashes of recovery codes) |
+| `users` | id, email, status, KDF parameters, salt, Argon2id(sign-in key), Argon2id(recovery proof), account key wrapped under the password-derived key and under the recovery key, dates, last sign-in IP, push allowed, own connector limits, 2FA (as for the admin credential) |
 | `sessions` | SHA-256(session token), account, kind (session or recovery ticket), stage, created, last seen, expiry, IP |
+| `cred_sessions` | SHA-256(2FA session token), admin credential, created, last seen, expiry, IP |
 | `approvals` | id, token, kind (`auth`, `fetch`, `action`), client address, SHA-256(nonce), match code, times, status, decided via; for actions also the name, risk, digest, encrypted summary and (only if the project allows) the plaintext summary |
 | `action_windows` | token, action name, until: open "approve similar for N minutes" windows |
 | `connectors` | id, owner, version, the code and its description (both encrypted under the connector's key), the key wrapped for the owner, size, dates, and the replaced version (encrypted) as a backup |

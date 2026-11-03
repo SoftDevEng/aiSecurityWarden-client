@@ -578,7 +578,8 @@ def _store_refresh_token(args: Any, token: str, who: str) -> None:
         url = getattr(args, "server", None) or os.environ.get("SW_SERVER_URL")
         if not url:
             raise SystemExit("sw-mcp: --project needs the server (--server or SW_SERVER_URL)")
-        admin = SecurityWardenClient(url, _read_cred_file(path),
+        from ..client.cli import TerminalSecondFactor
+        admin = SecurityWardenClient(url, _read_cred_file(path), second_factor=TerminalSecondFactor(),
                                      verify=getattr(args, "ca_bundle", None) or os.environ.get("SW_CA_BUNDLE") or True)
         admin.set_secret(args.project, "GMAIL_REFRESH_TOKEN", token)
         print(f"Signed in as {who}. Stored GMAIL_REFRESH_TOKEN in project {args.project}.", file=sys.stderr)

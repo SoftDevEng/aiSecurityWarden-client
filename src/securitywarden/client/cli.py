@@ -13,6 +13,13 @@ Admin use::
     swctl admin token set-actions <token-id> --rule 'gmail.read.*=allow' --rule 'gmail.label=window:30m' \
           --rule 'gmail.send=each' --channel admin_ui --channel push:telegram
     swctl admin approvals list
+    swctl admin 2fa status            # the admin credential's two-factor sign-in
+    swctl admin signout               # end the cached 2FA session now
+
+The admin credential needs a code from an authenticator app (Microsoft Authenticator, Google Authenticator,
+...) when the server requires it (the default). The first sign-in sets the app up. One code starts a 2FA session
+that later commands reuse until it ends; its token is cached next to the admin credential file (owner-only),
+and is useless without the credential.
 """
 
 from __future__ import annotations
@@ -35,6 +42,72 @@ from ..crypto import CryptoError
 
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DEFAULT_ADMIN_FILE = os.path.join("~", ".config", "securitywarden", "admin.cred")
+MFA_CACHE_FILE = os.path.join("~", ".config", "securitywarden", "admin-2fa-sessions.json")
+
+
+class TerminalSecondFactor:
+    """Asks for the admin credential's second factor in the terminal (prompts on stderr)."""
+
+    def code(self, retry: bool) -> str:
+        if retry:
+            print("swctl: that code was wrong (or already used); wait for the next one.", file=sys.stderr)
+        return _ask("Code from your authenticator app (or a recovery code): ")
+
+    def setup(self, key_text: str, uri: str, retry: bool) -> str:
+        if retry:
+            print("swctl: that code didn't match; check the key and try the next code.", file=sys.stderr)
+        else:
+            print("\nThis admin credential needs two-factor sign-in. Add it to your authenticator app\n"
+                  "(Microsoft Authenticator: + > Other account > Enter code manually) with this key:\n\n"
+                  f"    {key_text}\n\n"
+                  "Or open this link on the phone, or turn it into a QR code:\n"
+                  f"    {uri}\n", file=sys.stderr)
+        return _ask("Code the app shows now: ")
+
+    def recovery_codes(self, codes: list[str]) -> None:
+        print("\nTwo-factor sign-in is on. Save these single-use recovery codes somewhere safe (a password\n"
+              "manager). Each one signs in once if you lose your phone. They won't be shown again:\n", file=sys.stderr)
+        for c in codes:
+            print(f"    {c}", file=sys.stderr)
+        print("", file=sys.stderr)
+
+
+def _ask(prompt: str) -> str:
+    print(prompt, end="", file=sys.stderr, flush=True)
+    line = sys.stdin.readline()
+    if not line:
+        _die("no code given")
+    return line.strip()
+
+
+def _mfa_cache() -> tuple[str, dict]:
+    path = os.path.expanduser(MFA_CACHE_FILE)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return path, data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return path, {}
+
+
+def _mfa_cache_key(server: str, cred_id: str) -> str:
+    return f"{server.rstrip('/')}|{cred_id}"
+
+
+def _save_mfa_session(c: SecurityWardenClient) -> None:
+    path, data = _mfa_cache()
+    key = _mfa_cache_key(c.base, c.cred.id)
+    token = c.mfa_session
+    if data.get(key) == token:
+        return
+    if token:
+        data[key] = token
+    else:
+        data.pop(key, None)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f)
 
 
 def _die(msg: str, code: int = 1) -> "NoReturn":  # type: ignore[name-defined]
@@ -100,7 +173,16 @@ def _admin_client(args: argparse.Namespace) -> SecurityWardenClient:
         cred = _read_cred_file(DEFAULT_ADMIN_FILE)
     else:
         _die(f"no admin credential (use --admin-file, SW_ADMIN_CREDENTIAL_FILE, or {DEFAULT_ADMIN_FILE})")
-    return SecurityWardenClient(_server(args), cred, verify=_verify(args))
+    server = _server(args)
+    from ..crypto import parse_credential
+    cached = _mfa_cache()[1].get(_mfa_cache_key(server, parse_credential(cred).id))
+    c = SecurityWardenClient(server, cred, verify=_verify(args), second_factor=TerminalSecondFactor(),
+                             mfa_session=cached if isinstance(cached, str) else None)
+    _ADMIN_CLIENTS.append(c)
+    return c
+
+
+_ADMIN_CLIENTS: list[SecurityWardenClient] = []   # their 2FA sessions are cached when the command ends
 
 
 def _verify(args: argparse.Namespace) -> bool | str:
@@ -344,6 +426,27 @@ def _action_text(c: SecurityWardenClient, a: dict) -> str:
     return action_lines(a["action"], c.action_summary(a)).replace("\n", "\n    ")
 
 
+def cmd_2fa(args: argparse.Namespace) -> int:
+    c = _admin_client(args)
+    if args.action == "status":
+        st = c.second_factor_status()
+        print(f"two-factor sign-in: {'on' if st['enabled'] else 'off'}"
+              f"{' (required by this server)' if st['required'] else ''}")
+        if st["enabled"]:
+            print(f"recovery codes left: {st['recovery_codes_left']}")
+    elif args.action == "recovery-codes":
+        c.check_token()        # sign in first, so the code asked for below is a fresh one
+        TerminalSecondFactor().recovery_codes(c.new_recovery_codes(_ask("Current code from your authenticator app: ")))
+    return 0
+
+
+def cmd_signout(args: argparse.Namespace) -> int:
+    c = _admin_client(args)
+    c.sign_out()
+    print("Signed out: the next admin command asks for a code again.", file=sys.stderr)
+    return 0
+
+
 def cmd_audit(args: argparse.Namespace) -> int:
     for e in reversed(_admin_client(args).audit(args.limit)):
         print(f"{_ts(e['ts'])}  {'ok ' if e['ok'] else 'FAIL'} {e['action']:<15} "
@@ -447,6 +550,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     au = a.add_parser("audit"); au.add_argument("--limit", type=int, default=50)
     au.set_defaults(func=cmd_audit)
+
+    tf = a.add_parser("2fa", help="the admin credential's two-factor sign-in")
+    tfs = tf.add_subparsers(dest="action", required=True)
+    tfs.add_parser("status", help="on or off, and recovery codes left")
+    tfs.add_parser("recovery-codes", help="replace the recovery codes (needs a current code)")
+    tf.set_defaults(func=cmd_2fa)
+    so = a.add_parser("signout", help="end the 2FA session cached for this server")
+    so.set_defaults(func=cmd_signout)
     return p
 
 
@@ -458,6 +569,13 @@ def main(argv: list[str] | None = None) -> int:
         _die(str(e))
     except KeyboardInterrupt:
         return 130
+    finally:
+        for c in _ADMIN_CLIENTS:    # keep (or forget) the 2FA session for the next command
+            try:
+                _save_mfa_session(c)
+            except OSError as e:
+                print(f"swctl: couldn't cache the 2FA session: {e}", file=sys.stderr)
+        _ADMIN_CLIENTS.clear()
 
 
 if __name__ == "__main__":
