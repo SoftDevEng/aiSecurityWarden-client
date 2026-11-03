@@ -559,7 +559,8 @@ path returns the page; the app routes in the browser).
   TypeScript produces and rejects exactly the same.
 - **What the browser holds:** the admin credential and unwrapped project keys, in memory
   only (never `localStorage`, cookies or the URL). Sign-out, reload, closing the tab and 15
-  minutes of inactivity drop them. The API is called with the same bearer JWT as the
+  minutes of inactivity drop them. Only the session token survives a reload, in the tab's
+  `sessionStorage`, so the page can offer Unlock ([Sessions](#sessions)). The API is called with the same bearer JWT as the
   Python client; there is no cookie, so no CSRF surface.
 - **Headers on every response:** `Content-Security-Policy: default-src 'none'; script-src
   'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; base-uri
@@ -644,8 +645,18 @@ browser is a planned upgrade.
 request re-reads the session and the account (invariant 4): sign-out, sign-out everywhere, disabling and
 password changes take effect immediately. Sessions end after 15 minutes without a request
 (`SW_SESSION_IDLE`) and after 12 hours in any case (`SW_SESSION_MAX`). There are no cookies, so there is
-no CSRF surface; the browser keeps the token and the account key in memory only, so reloading the page
-signs out (the keys can't survive a reload without being stored, which they never are).
+no CSRF surface. The browser keeps the account key in memory only.
+
+**Unlocking after a page reload.** A reload wipes the page's memory, keys included. So that it doesn't mean a
+full sign-in (and another 2FA code), the tab keeps **only the session token** in `sessionStorage` (per tab,
+gone when the tab closes): an account's `sws1.` session with its email, or the admin credential's `swm1.` 2FA
+session with its credential id. Never a key, password or credential. After the reload the page offers
+**Unlock**: the account types its password; the browser sends the password proof to `POST
+/v1/account/unlock` (full session required) and gets the wrapped account key back, as at sign-in, so a stolen
+session token alone can't be used to guess the password offline. No second factor is asked: the session
+already had it. The operator pastes the admin credential, which signs in with the kept 2FA session (no code
+while it lasts). Signing out, idle sign-out and an ended session delete what was kept. While signed in, the
+page asks before it is left or reloaded.
 
 Each session has a `stage`: `full` after a complete sign-in, or `code` / `setup` while the second factor
 is still to come ([Second factor](#second-factor-2fa)). Only `full` sessions reach the account's data.
