@@ -39,8 +39,8 @@ gmail = "securitywarden.mcp.gmail:Gmail"
 swadmin = "securitywarden.client.gui:main"
 
 [project.urls]
-Homepage = "https://github.com/SoftDevEng/SecurityWarden-client"
-Issues = "https://github.com/SoftDevEng/SecurityWarden-client/issues"
+Homepage = "https://github.com/SoftDevEng/aiSecurityWarden-client"
+Issues = "https://github.com/SoftDevEng/aiSecurityWarden-client/issues"
 
 [tool.hatch.version]
 path = "src/securitywarden/__init__.py"

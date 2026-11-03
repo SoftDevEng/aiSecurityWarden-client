@@ -5,7 +5,7 @@ SecurityWarden is alpha software that hasn't been independently audited.
 ## Reporting a vulnerability
 
 Please **don't** open a public issue. Use GitHub's
-[private vulnerability reporting](https://github.com/SoftDevEng/SecurityWarden-client/security/advisories/new)
+[private vulnerability reporting](https://github.com/SoftDevEng/aiSecurityWarden-client/security/advisories/new)
 for this repository. Expect an acknowledgement within a few days.
 
 Helpful details: affected version, a description, reproduction steps, and the impact

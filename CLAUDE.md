@@ -2,7 +2,7 @@
 
 The open-source (Apache-2.0) client for SecurityWarden: scoped machine tokens and end-to-end encryption.
 Primary consumer: Hermes Agent via its command-helper secret source (`swctl export`).
-Must run on Linux and Windows. The server is a separate, private repository (`SecurityWarden-server`),
+Must run on Linux and Windows. The server is a separate, private repository (`aiSecurityWarden-server`),
 which depends on this package for its crypto and parsers.
 
 ## Layout
