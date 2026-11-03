@@ -152,7 +152,7 @@ class AdminApp:
         self._idle_job: str | None = None
         self._poll_job: str | None = None
 
-        root.title("SecurityWarden Admin")
+        root.title("aiSecurityWarden Admin")
         root.geometry("980x600")
         root.minsize(760, 440)
         self.body = ttk.Frame(root)
@@ -164,7 +164,7 @@ class AdminApp:
     # -- plumbing -----------------------------------------------------------------
 
     def error(self, message: str) -> None:
-        messagebox.showerror("SecurityWarden", message, parent=self.root)
+        messagebox.showerror("aiSecurityWarden", message, parent=self.root)
 
     def confirm(self, title: str, message: str) -> bool:
         return messagebox.askyesno(title, message, icon="warning", default="no", parent=self.root)
@@ -215,7 +215,7 @@ class AdminApp:
         self._clear_body()
         box = ttk.Frame(self.body, padding=24)
         box.place(relx=0.5, rely=0.45, anchor="center")
-        ttk.Label(box, text="SecurityWarden", font=("", 16, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(box, text="aiSecurityWarden", font=("", 16, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
         ttk.Label(box, text=f"Admin  ·  v{__version__}").grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 16))
 
         ttk.Label(box, text="Server address").grid(row=2, column=0, sticky="w")
@@ -593,7 +593,7 @@ class AdminApp:
     def _selected(self, tree: "ttk.Treeview", what: str) -> str | None:
         sel = tree.selection()
         if not sel:
-            messagebox.showinfo("SecurityWarden", f"Select a {what} first.", parent=self.root)
+            messagebox.showinfo("aiSecurityWarden", f"Select a {what} first.", parent=self.root)
             return None
         return sel[0]
 
