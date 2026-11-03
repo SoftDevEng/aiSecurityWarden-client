@@ -77,8 +77,26 @@ pip install securitywarden        # once published; for now from this repository
 pip install git+https://github.com/SoftDevEng/aiSecurityWarden-client
 ```
 
-Needs Python 3.10+. `swadmin` also needs Tkinter (ships with Python on Windows and macOS;
-`sudo apt install python3-tk` on Debian/Ubuntu).
+Needs Python 3.10+, on Linux, Windows or macOS (all three are tested in CI). `swadmin` also needs Tkinter:
+it ships with the python.org installers for Windows and macOS; on Debian/Ubuntu, `sudo apt install python3-tk`.
+
+### macOS
+
+1. Install Python from [python.org](https://www.python.org/downloads/macos/) (3.10 or newer). Its installer
+   includes a current Tk, so `swadmin` works. Avoid Apple's built-in `/usr/bin/python3`: its Tk is old and
+   draws windows badly. With Homebrew's Python, also run `brew install python-tk`.
+2. Install the client in its own virtual environment:
+
+   ```bash
+   python3 -m venv ~/.venvs/securitywarden
+   ~/.venvs/securitywarden/bin/pip install git+https://github.com/SoftDevEng/aiSecurityWarden-client
+   ~/.venvs/securitywarden/bin/swadmin          # the admin window; swctl and sw-mcp are next to it
+   ```
+
+3. Files live where they do on Linux: `~/.config/securitywarden/` (tokens, the admin credential file if you use
+   one, swctl's cached 2FA session), each readable by you only.
+
+The website works in Safari too (CI runs it in WebKit, Safari's engine).
 
 From source:
 
