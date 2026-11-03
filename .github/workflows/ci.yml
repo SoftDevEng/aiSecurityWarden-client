@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]   # the client must work on Linux, Windows and macOS
         python: ["3.10", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -24,6 +24,12 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -e ".[dev]"
       - run: pytest -q
+      - name: Installed commands start, and swadmin has a usable Tk (8.6+)
+        shell: bash
+        run: |
+          swctl --version
+          sw-mcp --help > /dev/null
+          python -c "import tkinter, securitywarden.client.gui; assert tkinter.TkVersion >= 8.6, tkinter.TkVersion; print('Tk', tkinter.TkVersion)"
 
   wheel:
     needs: [test]
