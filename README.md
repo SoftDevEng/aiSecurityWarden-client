@@ -74,7 +74,7 @@ read any secret**. A full copy of the server's database is useless without a tok
 
 ```bash
 pip install securitywarden        # once published; for now from this repository:
-pip install git+https://github.com/SoftDevEng/SecurityWarden-client
+pip install git+https://github.com/SoftDevEng/aiSecurityWarden-client
 ```
 
 Needs Python 3.10+. `swadmin` also needs Tkinter (ships with Python on Windows and macOS;
@@ -83,7 +83,7 @@ Needs Python 3.10+. `swadmin` also needs Tkinter (ships with Python on Windows a
 From source:
 
 ```bash
-git clone https://github.com/SoftDevEng/SecurityWarden-client && cd SecurityWarden-client
+git clone https://github.com/SoftDevEng/aiSecurityWarden-client && cd aiSecurityWarden-client
 pip install -e ".[dev]" && pytest
 ```
 

@@ -39,7 +39,7 @@ What you end up with:
 Install the client:
 
 ```bash
-python -m pip install "securitywarden @ git+https://github.com/SoftDevEng/SecurityWarden-client"
+python -m pip install "securitywarden @ git+https://github.com/SoftDevEng/aiSecurityWarden-client"
 ```
 
 ### Hermes or Claude Desktop: add the MCP server
