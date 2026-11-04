@@ -628,6 +628,13 @@ browser is a planned upgrade.
 - **Operator approval** `GET /v1/admin/users`, `POST /v1/admin/users/{id}/approve|disable|enable`,
   `DELETE /v1/admin/users/{id}`. Disabling ends the account's sessions at once. Deleting removes its projects
   and secrets, revokes its machine tokens and ends its sessions.
+- **Team admins:** the operator (the admin credential, "super admin") gives an active account the admin role
+  with `POST /v1/admin/users/{id}/role {role: "admin"|"user"}`. Signed in with its session token and with
+  two-factor sign-in on, such an account may call `GET /v1/admin/users`, `POST …/approve|disable|enable` and
+  `POST …/push` (phone-approval trials), never for itself or another admin (`403`). Deleting accounts, 2FA
+  resets, roles, limits and server settings need the admin credential. Sign-in answers carry `user.role`. Checked
+  on every request; team admins' changes are logged "by team admin <email>". Like the operator, team admins
+  never receive anyone's keys or secrets.
 - **Sign-in** `POST /v1/account/signin {email, auth_key}`. Wrong email and wrong password get the same `401`
   (an unknown email is checked against a dummy hash, so timing is the same). Only after a correct password
   does the answer say the account is pending or disabled (`403`). Success returns a session token, the user
