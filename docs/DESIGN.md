@@ -198,9 +198,16 @@ as the server-wide settings: secrets are never sent back (last four characters o
 
 - **Which settings a request uses:** its token's project's own settings. The operator's projects without
   their own use the server-wide settings above, so existing installs keep working unchanged.
-- **The operator's switch for accounts:** `users.push_allowed`, set with `POST /v1/admin/users/{id}/push
-  {allowed}`, off by default. While it is off (or the account is disabled or deleted) the account's projects
-  use no push channels and their pollers stop; their settings are kept.
+- **The operator's switch for accounts:** off, a **trial** of N days, or **unlimited**, set with
+  `POST /v1/admin/users/{id}/push {allowed, trial_days?, restart?}` (`trial_days` 1-3650 = the trial's total
+  length; left out or null = unlimited; `restart` starts the clock over). Off by default. A trial's clock starts
+  when the account first saves Telegram or ntfy settings for a project (at once if it already has some when the
+  trial is given or restarted). `GET /v1/admin/users` and a project's notify view report `push`:
+  `{state: off|unlimited|not_started|active|ended, days, days_used, days_left, ends_at}`. While push is off or
+  the trial has ended (or the account is disabled or deleted) the account's projects use no push channels and
+  their pollers stop; their settings are kept, and **requests whose token lists only push channels can be
+  decided on the website or in swadmin instead**, so bots keep working. Databases from before trials keep their
+  accounts' push unlimited.
 - **Telegram:** a bot token, chat id and allowed user ids, at the server's Telegram API address
   (`SW_TELEGRAM_API_URL`; an account can't choose another). **One bot may serve any number of projects and
   owners**, each with its own chat.
