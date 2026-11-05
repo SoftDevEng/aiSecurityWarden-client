@@ -8,7 +8,8 @@ does it (``Plan.run``). The framework then asks SecurityWarden whether the token
 - a person has to decide: the AI gets "waiting_for_approval" with a request id, straight away, and calls
   ``check_approval`` later (or the same tool with the same arguments). Once approved, exactly the stored
   arguments run, once; the AI can't change them in between;
-- denied, expired or forbidden by the rules: the AI is told so and nothing runs.
+- denied, expired or forbidden by the rules: the AI is told so and nothing runs. A person may deny with a
+  comment ("send it to Ann instead"): the AI gets the comment and may change the request and ask again.
 
 The rules live in SecurityWarden (the token's action policy), never here, so a misbehaving agent can't
 loosen them. Secrets come from SecurityWarden too and stay in this process's memory: never in tool results,
@@ -45,6 +46,14 @@ _OUTCOMES = {
     "action_mismatch": "The action no longer matches what was approved, so it wasn't done.",
     "approval_mismatch": "This approval belongs to another process or address, so it wasn't used.",
 }
+
+
+def denied_with_comment(tool: str, comment: str) -> str:
+    """What the AI is told when a person denied the action and said what to change."""
+    return (f"The user denied this action and asked for changes:\n\n{comment}\n\n"
+            f"Nothing was done. Change the request as they asked and call {tool} again: that makes a new request, "
+            "which they can approve, deny, or deny with another comment. If they simply deny it, stop and don't "
+            "ask again.")
 
 
 class ToolError(Exception):
@@ -524,7 +533,9 @@ class Hub:
             status = self.client.check_action(rid, p.nonce, p.digest)
         except ApprovalError as e:
             del self.pending[rid]
-            self.log(f"{p.tool}: {p.action} {e.reason}")
+            self.log(f"{p.tool}: {p.action} {e.reason}" + (" with a comment" if e.comment else ""))
+            if e.reason == "approval_denied" and e.comment:
+                return Result(denied_with_comment(p.tool, e.comment), True)
             return Result(_OUTCOMES.get(e.reason, f"The action wasn't approved ({e})."), True)
         except (ApprovalPending, TokenRejected):
             raise

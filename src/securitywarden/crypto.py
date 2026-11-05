@@ -25,7 +25,8 @@ Key hierarchy::
       ├─ wrapped under the admin key                  -> projects.wrapped_key
       ├─ HKDF "secret-enc"     -> AES key for secret blobs
       ├─ HKDF "name-mac"       -> HMAC key for secret name lookup ids
-      └─ HKDF "action-summary" -> AES key for encrypted action summaries
+      ├─ HKDF "action-summary" -> AES key for encrypted action summaries
+      └─ HKDF "approval-comment" -> AES key for "deny with comment" comments
 
 AAD binds every ciphertext to its context (project id, token id, name mac),
 so the server cannot swap blobs between projects, tokens, or names.
@@ -42,6 +43,7 @@ import re
 import secrets as _secrets
 import unicodedata
 from dataclasses import dataclass
+from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
@@ -406,6 +408,44 @@ def decrypt_action_summary(project_key: bytes, project_id: str, request_id: str,
     if not isinstance(data, dict):
         raise CryptoError("action summary is not an object")
     return data
+
+
+APPROVAL_COMMENT_MAX = 1000     # characters
+
+
+def normalize_approval_comment(text: Any) -> str:
+    """A denial's comment ("send it to Ann instead"): trimmed, 1 to 1000 characters, no control characters
+    other than line breaks and tabs. Raises ValueError with a message for the person."""
+    if not isinstance(text, str):
+        raise ValueError("the comment must be text")
+    t = text.replace("\r\n", "\n").strip()
+    if not t:
+        raise ValueError("the comment is empty")
+    if len(t) > APPROVAL_COMMENT_MAX:
+        raise ValueError(f"the comment is longer than {APPROVAL_COMMENT_MAX} characters")
+    if any((ord(ch) < 32 and ch not in "\n\t") or ord(ch) == 127 for ch in t):
+        raise ValueError("the comment holds control characters")
+    return t
+
+
+def _aad_comment(project_id: str, request_id: str) -> str:
+    return f"{PREFIX}|comment|{project_id}|{request_id}"
+
+
+def encrypt_approval_comment(project_key: bytes, project_id: str, request_id: str, text: str) -> str:
+    """What the person who denied an action asks to change, encrypted under the project key (the website does
+    this; the agent's machine decrypts it). Bound to its project and request id."""
+    k = hkdf(project_key, b"securitywarden/v1/approval-comment")
+    return seal(k, normalize_approval_comment(text).encode("utf-8"), _aad_comment(project_id, request_id))
+
+
+def decrypt_approval_comment(project_key: bytes, project_id: str, request_id: str, blob: str) -> str:
+    k = hkdf(project_key, b"securitywarden/v1/approval-comment")
+    raw = open_(k, blob, _aad_comment(project_id, request_id))
+    try:
+        return normalize_approval_comment(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise CryptoError("the comment is not valid text") from None
 
 
 # ---------------------------------------------------------------------------

@@ -47,8 +47,10 @@ class FakeSecurityWarden:
     def approve(self, request_id: str) -> None:
         self.requests[request_id]["state"] = "approved"
 
-    def deny(self, request_id: str) -> None:
+    def deny(self, request_id: str, comment: str | None = None) -> None:
+        """Deny it; with ``comment``, as "deny with comment" does (the agent may change it and ask again)."""
         self.requests[request_id]["state"] = "denied"
+        self.requests[request_id]["comment"] = comment
 
     def last(self) -> dict[str, Any]:
         """The most recent request: action, args, risk, summary, digest, state."""
@@ -131,7 +133,7 @@ class FakeSecurityWarden:
         if r["state"] == "pending":
             return "pending"
         if r["state"] == "denied":
-            raise ApprovalError("approval_denied")
+            raise ApprovalError("approval_denied", r.get("comment"))
         if r["state"] == "used":
             raise ApprovalError("approval_used")
         r["state"] = "used"
