@@ -25,7 +25,8 @@ Key hierarchy::
       ├─ wrapped under the admin key                  -> projects.wrapped_key
       ├─ HKDF "secret-enc"     -> AES key for secret blobs
       ├─ HKDF "name-mac"       -> HMAC key for secret name lookup ids
-      └─ HKDF "action-summary" -> AES key for encrypted action summaries
+      ├─ HKDF "action-summary" -> AES key for encrypted action summaries
+      └─ HKDF "approval-comment" -> AES key for "deny with comment" comments
 
 AAD binds every ciphertext to its context (project id, token id, name mac),
 so the server cannot swap blobs between projects, tokens, or names.
@@ -42,8 +43,11 @@ import re
 import secrets as _secrets
 import unicodedata
 from dataclasses import dataclass
+from typing import Any
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -406,6 +410,44 @@ def decrypt_action_summary(project_key: bytes, project_id: str, request_id: str,
     return data
 
 
+APPROVAL_COMMENT_MAX = 1000     # characters
+
+
+def normalize_approval_comment(text: Any) -> str:
+    """A denial's comment ("send it to Ann instead"): trimmed, 1 to 1000 characters, no control characters
+    other than line breaks and tabs. Raises ValueError with a message for the person."""
+    if not isinstance(text, str):
+        raise ValueError("the comment must be text")
+    t = text.replace("\r\n", "\n").strip()
+    if not t:
+        raise ValueError("the comment is empty")
+    if len(t) > APPROVAL_COMMENT_MAX:
+        raise ValueError(f"the comment is longer than {APPROVAL_COMMENT_MAX} characters")
+    if any((ord(ch) < 32 and ch not in "\n\t") or ord(ch) == 127 for ch in t):
+        raise ValueError("the comment holds control characters")
+    return t
+
+
+def _aad_comment(project_id: str, request_id: str) -> str:
+    return f"{PREFIX}|comment|{project_id}|{request_id}"
+
+
+def encrypt_approval_comment(project_key: bytes, project_id: str, request_id: str, text: str) -> str:
+    """What the person who denied an action asks to change, encrypted under the project key (the website does
+    this; the agent's machine decrypts it). Bound to its project and request id."""
+    k = hkdf(project_key, b"securitywarden/v1/approval-comment")
+    return seal(k, normalize_approval_comment(text).encode("utf-8"), _aad_comment(project_id, request_id))
+
+
+def decrypt_approval_comment(project_key: bytes, project_id: str, request_id: str, blob: str) -> str:
+    k = hkdf(project_key, b"securitywarden/v1/approval-comment")
+    raw = open_(k, blob, _aad_comment(project_id, request_id))
+    try:
+        return normalize_approval_comment(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise CryptoError("the comment is not valid text") from None
+
+
 # ---------------------------------------------------------------------------
 # OAuth sign-in for connectors (RFC 7636 PKCE)
 # ---------------------------------------------------------------------------
@@ -711,3 +753,28 @@ def seal_at_rest(at_rest_key: bytes, plaintext: bytes, context: str) -> str:
 
 def open_at_rest(at_rest_key: bytes, blob: str, context: str) -> bytes:
     return open_(hkdf(at_rest_key, b"securitywarden/v1/at-rest"), blob, _aad_at_rest(context))
+
+
+# ---------------------------------------------------------------------------
+# signatures from outside services (Discord interactions)
+# ---------------------------------------------------------------------------
+#
+# Discord signs every request it sends to an interactions endpoint (button presses) with the application's
+# Ed25519 key: signature = Ed25519(timestamp || body). The server checks it with the public key the project
+# owner copied from Discord's developer portal, before reading anything else in the request.
+
+ED25519_PUBLIC_KEY_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def verify_ed25519(public_key_hex: str, message: bytes, signature_hex: str) -> bool:
+    """True only if ``signature_hex`` (128 hex characters) is a valid Ed25519 signature of ``message`` by
+    ``public_key_hex`` (64 hex characters). Malformed input is simply False, never an exception."""
+    if not isinstance(public_key_hex, str) or not ED25519_PUBLIC_KEY_HEX_RE.match(public_key_hex.lower()):
+        return False
+    if not isinstance(signature_hex, str) or not re.fullmatch(r"[0-9a-fA-F]{128}", signature_hex):
+        return False
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key_hex)).verify(bytes.fromhex(signature_hex), message)
+    except (InvalidSignature, ValueError):
+        return False
+    return True

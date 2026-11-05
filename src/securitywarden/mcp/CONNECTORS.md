@@ -32,7 +32,9 @@ Then replace the example tools in `src/sw_connector_notes/connector.py`, update 
    - allowed: `run(args)` is called now and its result goes to the agent;
    - a person must decide: the agent is told `waiting_for_approval` immediately; the person sees your
      `summary` (website, phone); once approved, `run` is called with the stored `args`, once;
-   - refused or denied: nothing runs, and the agent is told why.
+   - refused or denied: nothing runs, and the agent is told why. The person may **deny with a comment**
+     ("send it to Ann instead"): the agent gets the comment and may call your tool again with changed
+     arguments, which is a new request. Your connector needs nothing for this.
 4. Text your `run` returns that came from outside (messages, documents, names) is wrapped as untrusted data.
 
 So: **`args` is the contract with the person approving.** Whatever `run` does must be fully determined by

@@ -266,6 +266,9 @@ def build() -> dict[str, Any]:
             "title": "Send an email", "fields": [["To", "bob@example.com"], ["Subject", "Invoice 1042"]],
             "preview": "Hi Bob, attached is the invoice \u2713", "count": 1})
         sblob = crypto.encrypt_action_summary(pkey, pid, rid, summary)
+    comment = "Send it to ann@example.com instead,\nand say thanks \u2713"
+    with seeded("comment"):
+        cblob = crypto.encrypt_approval_comment(pkey, pid, rid, comment)
     v["actions"] = {
         "digests": [{"action": a, "args": args, "digest": crypto.action_digest(a, args)} for a, args in digest_cases],
         "summary": {"project_id": pid, "project_key_hex": pkey.hex(), "request_id": rid, "summary": summary,
@@ -275,6 +278,14 @@ def build() -> dict[str, Any]:
              "blob": sblob},
             {"why": "another project", "project_id": crypto.b64e(key("p2")[:16]), "request_id": rid, "blob": sblob},
         ],
+        "comment": {"project_id": pid, "project_key_hex": pkey.hex(), "request_id": rid, "comment": comment,
+                    "blob": cblob, "max": crypto.APPROVAL_COMMENT_MAX},
+        "comment_must_fail": [
+            {"why": "another request id", "project_id": pid, "request_id": crypto.b64e(key("action/other")[:16]),
+             "blob": cblob},
+            {"why": "a summary is not a comment", "project_id": pid, "request_id": rid, "blob": sblob},
+        ],
+        "bad_comments": ["", "   ", "x" * (crypto.APPROVAL_COMMENT_MAX + 1), "bell\u0007", "nul\u0000"],
     }
     pol = {"channels": ["admin_ui", "push:telegram"], "timeout": 7200,
            "rules": [{"match": "gmail.read.*", "mode": "allow"}, {"match": "gmail.label", "mode": "window", "window": 1800},

@@ -117,3 +117,51 @@ def test_summary_encryption_vectors():
     assert crypto.decrypt_action_summary(pkey, "p" * 22, "r" * 22, blob)["title"] == "t"
     with pytest.raises(CryptoError):
         crypto.decrypt_action_summary(crypto.new_key(), "p" * 22, "r" * 22, blob)
+
+
+def test_comment_encryption_vectors():
+    c = V["comment"]
+    pkey = bytes.fromhex(c["project_key_hex"])
+    assert crypto.decrypt_approval_comment(pkey, c["project_id"], c["request_id"], c["blob"]) == c["comment"]
+    assert c["max"] == crypto.APPROVAL_COMMENT_MAX
+    for bad in V["comment_must_fail"]:
+        with pytest.raises(CryptoError):
+            crypto.decrypt_approval_comment(pkey, bad["project_id"], bad["request_id"], bad["blob"])
+    for bad in V["bad_comments"]:
+        with pytest.raises(ValueError):
+            crypto.normalize_approval_comment(bad)
+    assert crypto.normalize_approval_comment("  two\r\nlines\t ok ") == "two\nlines\t ok"
+    blob = crypto.encrypt_approval_comment(pkey, "p" * 22, "r" * 22, "x" * crypto.APPROVAL_COMMENT_MAX)
+    assert crypto.decrypt_approval_comment(pkey, "p" * 22, "r" * 22, blob) == "x" * crypto.APPROVAL_COMMENT_MAX
+    with pytest.raises(CryptoError):
+        crypto.decrypt_approval_comment(crypto.new_key(), "p" * 22, "r" * 22, blob)
+
+
+def test_check_action_returns_the_denial_comment():
+    """The server's 403 carries the comment encrypted (website) or plain (Telegram / Discord)."""
+    import time
+
+    import httpx
+    from securitywarden.client.api import ApprovalError, SecurityWardenClient
+
+    pid, rid, pkey = crypto.new_id(), crypto.new_id(), crypto.new_key()
+    answers = {
+        "enc": {"detail": "approval_denied", "comment_enc": crypto.encrypt_approval_comment(pkey, pid, rid, "Use Ann")},
+        "plain": {"detail": "approval_denied", "comment": "  Wait until Friday "},
+        "none": {"detail": "approval_denied"},
+        "junk": {"detail": "approval_denied", "comment_enc": "v1.AAAA"},
+        "other": {"detail": "approval_denied", "comment_enc": crypto.encrypt_approval_comment(pkey, pid, "x" * 22, "no")},
+        "expired": {"detail": "approval_expired", "comment": "ignored"},
+    }
+    which = {"k": ""}
+    http = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(403, json=answers[which["k"]])))
+    c = SecurityWardenClient("https://sw.example", crypto.new_credential(crypto.KIND_MACHINE), http=http)
+    c._token, c._token_exp = "t", time.monotonic() + 600
+    c._action_cfg = {"project_id": pid, "project_key": pkey, "summaries": "plain"}
+    for k, (reason, comment) in {"enc": ("approval_denied", "Use Ann"), "plain": ("approval_denied", "Wait until Friday"),
+                                 "none": ("approval_denied", None), "junk": ("approval_denied", None),
+                                 "other": ("approval_denied", None), "expired": ("approval_expired", None)}.items():
+        which["k"] = k
+        with pytest.raises(ApprovalError) as e:
+            c.check_action(rid, "n", "d")
+        assert (e.value.reason, e.value.comment) == (reason, comment), k

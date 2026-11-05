@@ -20,10 +20,12 @@ class SecurityWardenError(Exception):
 
 
 class ApprovalError(SecurityWardenError):
-    """A human approval was denied, expired, cancelled or could not be redeemed."""
+    """A human approval was denied, expired, cancelled or could not be redeemed. ``comment``: what the person
+    who denied an action asked to change instead ("deny with comment"), if anything."""
 
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, comment: str | None = None):
         self.reason = reason
+        self.comment = comment
         super().__init__(_APPROVAL_TEXT.get(reason, f"approval failed: {reason}"))
 
 
@@ -379,8 +381,30 @@ class SecurityWardenClient:
             return "pending"
         if r.status_code == 403:
             reason = _detail(r)
-            raise ApprovalError(reason if reason.startswith(("approval_", "action_")) else "approval_denied")
+            reason = reason if reason.startswith(("approval_", "action_")) else "approval_denied"
+            raise ApprovalError(reason, self._denial_comment(r, request_id) if reason == "approval_denied" else None)
         return "approved"
+
+    def _denial_comment(self, r: httpx.Response, request_id: str) -> str | None:
+        """The comment that came with a denial: encrypted under the project key (from the website), or plain
+        (typed in Telegram or Discord, for projects whose phone messages show the details). A comment that
+        doesn't decrypt or isn't valid text is dropped: the denial itself still stands."""
+        try:
+            body = r.json()
+        except ValueError:
+            return None
+        if not isinstance(body, dict):
+            return None
+        try:
+            if isinstance(body.get("comment_enc"), str):
+                cfg = self.action_config()
+                return crypto.decrypt_approval_comment(cfg["project_key"], cfg["project_id"], request_id,
+                                                       body["comment_enc"])
+            if isinstance(body.get("comment"), str):
+                return crypto.normalize_approval_comment(body["comment"])
+        except (CryptoError, ValueError, SecurityWardenError):
+            return None
+        return None
 
     # -- admin: projects ----------------------------------------------------------
 

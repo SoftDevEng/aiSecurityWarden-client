@@ -55,3 +55,10 @@ def test_ip_allowed():
     assert not ip_allowed("192.168.1.13", ["192.168.1.12/32"])
     assert not ip_allowed("unknown", ["0.0.0.0/0"])
     assert not ip_allowed("::1", ["0.0.0.0/0"])
+
+
+def test_discord_is_a_push_channel():
+    from securitywarden import approval
+    assert "push:discord" in approval.PUSH_CHANNELS
+    p = approval.normalize_policy({"channels": ["admin_ui", "push:discord"]})
+    assert p["channels"] == ["admin_ui", "push:discord"]

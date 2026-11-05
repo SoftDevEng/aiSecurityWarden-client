@@ -51,8 +51,9 @@ class FakeServer:
         return {"status": status, "request_id": rid, "nonce": f"n{self.n}", "digest": digest, "match": "42",
                 "expires_in": 3600, "check_after": 20}
 
-    def decide(self, rid, approve):
+    def decide(self, rid, approve, comment=None):
         self.requests[rid]["state"] = "approved" if approve else "denied"
+        self.requests[rid]["comment"] = comment
 
     def check_action(self, rid, nonce, digest):
         r = self.requests[rid]
@@ -61,7 +62,7 @@ class FakeServer:
         if r["state"] == "pending":
             return "pending"
         if r["state"] == "denied":
-            raise ApprovalError("approval_denied")
+            raise ApprovalError("approval_denied", r.get("comment"))
         if r["state"] == "redeemed":
             raise ApprovalError("approval_used")
         r["state"] = "redeemed"
@@ -179,6 +180,28 @@ def test_denied_and_forbidden_actions_do_nothing(hub, server):
     r = hub.call("notes_delete", {"ids": ["n1"]})
     assert r.is_error and "rules for this token don't allow" in r.text
     assert _notes(hub).deleted == []
+
+
+def test_deny_with_comment_tells_the_agent_what_to_change_and_it_may_ask_again(hub, server):
+    rid = hub.call("notes_delete", {"ids": ["n1", "n2"]}).data["request_id"]
+    server.decide(rid, False, "Only delete n2, keep n1.")
+    r = hub.call("check_approval", {"request_id": rid})
+    assert r.is_error and "asked for changes" in r.text and "Only delete n2, keep n1." in r.text
+    assert "call notes_delete again" in r.text and _notes(hub).deleted == []
+    # the revised request is a new one, decided on its own; asking again and again is fine
+    rid2 = hub.call("notes_delete", {"ids": ["n2"]}).data["request_id"]
+    assert rid2 != rid
+    server.decide(rid2, False, "Actually wait until Friday.")
+    assert "Friday" in hub.call("check_approval", {"request_id": rid2}).text
+    rid3 = hub.call("notes_delete", {"ids": ["n2"]}).data["request_id"]
+    server.decide(rid3, True)
+    assert not hub.call("check_approval", {"request_id": rid3}).is_error
+    assert _notes(hub).deleted == ["n2"]
+    # a plain denial still says stop
+    rid4 = hub.call("notes_delete", {"ids": ["n1"]}).data["request_id"]
+    server.decide(rid4, False)
+    r = hub.call("check_approval", {"request_id": rid4})
+    assert "Don't try it again" in r.text and "asked for changes" not in r.text
 
 
 def test_the_approval_is_bound_to_the_stored_action(hub, server):

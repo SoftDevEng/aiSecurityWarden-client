@@ -51,6 +51,7 @@ admin key ──wrap──▶ project_key ◀──wrap── machine token key 
 | project key for the admin | `sw1\|pkey-admin\|<project_id>` |
 | secret blob | `sw1\|secret\|<project_id>\|<name_mac>` |
 | action summary | `sw1\|action\|<project_id>\|<request_id>` |
+| comment on a denied action | `sw1\|comment\|<project_id>\|<request_id>` |
 | machine token under a setup code | `sw1\|setup\|<setup_id>` |
 | connector key for the operator / an account / a project | `sw1\|ckey-admin\|<cid>`, `sw1\|ckey-user\|<user_id>\|<cid>`, `sw1\|ckey-project\|<project_id>\|<cid>` |
 | a connector version's code / description | `sw1\|connector-bundle\|<cid>\|<version>`, `sw1\|connector-meta\|<cid>\|<version>` |
@@ -333,7 +334,27 @@ or resetting its limits ends pending action requests and open windows.
 - `POST /v1/actions/{id}` with `{"nonce", "digest"}` (same token and client address as the request):
   `202` still pending; `200 {"status": "approved"}` once, when approved (it is used up by this call);
   `403 approval_denied | approval_expired | approval_cancelled | approval_used | approval_mismatch |
-  action_mismatch` otherwise.
+  action_mismatch` otherwise. A denial may carry the person's comment (below) next to `detail`:
+  `{"detail": "approval_denied", "comment_enc": "v1...."}` or `{"detail": "approval_denied", "comment": "..."}`.
+
+### Deny with comment
+
+The person deciding can deny an action and say what to change ("send it to Ann instead"). The agent is told
+the comment, nothing runs, and it may change the request and ask again: that is a new request with a new
+digest, decided on its own. There is no limit on rounds beyond the token's own (`max_pending`,
+`max_per_hour`); a plain denial still tells the agent to stop.
+
+- A comment is 1 to 1000 characters after trimming, line breaks and tabs allowed, no other control characters
+  (`normalize_approval_comment`). Action requests only; session and fetch approvals are approve or deny.
+- **On the website** the comment is encrypted in the browser under the project key
+  (`HKDF(project_key, "securitywarden/v1/approval-comment")`, AAD above) and sent as `comment_enc`; the server
+  stores it and can't read it, whatever the project's summaries setting.
+- **In Telegram and Discord** (a third button, "Deny with comment") the person types the comment in the chat
+  app, so the server receives it in plaintext and stores it as `comment`. Those buttons only exist on messages
+  that carry buttons at all, which is only for projects whose phone messages show the summary in plaintext:
+  the comment is no more exposed than the request it answers. ntfy can't take typed replies.
+- The agent's machine decrypts `comment_enc` with the project key (`action_config`); a comment that doesn't
+  decrypt or isn't valid text is dropped, and the denial stands.
 
 Pending action requests use the same machinery as session and fetch approvals: match codes, one-time
 capabilities in the Telegram / ntfy buttons (per project approval setup), the Approvals pages, the
