@@ -43,7 +43,9 @@ import secrets as _secrets
 import unicodedata
 from dataclasses import dataclass
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -711,3 +713,28 @@ def seal_at_rest(at_rest_key: bytes, plaintext: bytes, context: str) -> str:
 
 def open_at_rest(at_rest_key: bytes, blob: str, context: str) -> bytes:
     return open_(hkdf(at_rest_key, b"securitywarden/v1/at-rest"), blob, _aad_at_rest(context))
+
+
+# ---------------------------------------------------------------------------
+# signatures from outside services (Discord interactions)
+# ---------------------------------------------------------------------------
+#
+# Discord signs every request it sends to an interactions endpoint (button presses) with the application's
+# Ed25519 key: signature = Ed25519(timestamp || body). The server checks it with the public key the project
+# owner copied from Discord's developer portal, before reading anything else in the request.
+
+ED25519_PUBLIC_KEY_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def verify_ed25519(public_key_hex: str, message: bytes, signature_hex: str) -> bool:
+    """True only if ``signature_hex`` (128 hex characters) is a valid Ed25519 signature of ``message`` by
+    ``public_key_hex`` (64 hex characters). Malformed input is simply False, never an exception."""
+    if not isinstance(public_key_hex, str) or not ED25519_PUBLIC_KEY_HEX_RE.match(public_key_hex.lower()):
+        return False
+    if not isinstance(signature_hex, str) or not re.fullmatch(r"[0-9a-fA-F]{128}", signature_hex):
+        return False
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key_hex)).verify(bytes.fromhex(signature_hex), message)
+    except (InvalidSignature, ValueError):
+        return False
+    return True

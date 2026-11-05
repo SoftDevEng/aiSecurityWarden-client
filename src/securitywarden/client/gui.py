@@ -52,7 +52,8 @@ def _what(a: dict[str, Any]) -> str:
 
 
 APPROVAL_MODES = {"No approval": None, "Once per session": "session", "Every fetch": "every_fetch"}
-CHANNEL_LABELS = {"admin_ui": "This admin window", "push:ntfy": "ntfy push", "push:telegram": "Telegram"}
+CHANNEL_LABELS = {"admin_ui": "This admin window", "push:ntfy": "ntfy push", "push:telegram": "Telegram",
+                  "push:discord": "Discord"}
 
 
 # ---------------------------------------------------------------------------

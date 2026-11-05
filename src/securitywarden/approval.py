@@ -15,7 +15,7 @@ import re
 from typing import Any, Mapping
 
 MODES = ("session", "every_fetch")
-CHANNELS = ("admin_ui", "push:ntfy", "push:telegram")
+CHANNELS = ("admin_ui", "push:ntfy", "push:telegram", "push:discord")
 PUSH_CHANNELS = tuple(c for c in CHANNELS if c.startswith("push:"))
 
 MAX_SESSION_TTL = 7 * 86400  # hard ceiling; servers may lower it (SW_MAX_SESSION_TTL)

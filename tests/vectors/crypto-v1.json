@@ -15,7 +15,8 @@
   "channels": [
    "admin_ui",
    "push:ntfy",
-   "push:telegram"
+   "push:telegram",
+   "push:discord"
   ],
   "defaults": {
    "mode": "session",

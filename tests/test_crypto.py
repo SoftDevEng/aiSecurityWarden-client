@@ -63,3 +63,32 @@ def test_tampered_blob_rejected():
     raw[-1] ^= 1
     with pytest.raises(CryptoError):
         crypto.decrypt_secret(pk, pid, mac, "v1." + crypto.b64e(bytes(raw)))
+
+
+# -- Ed25519 signatures (Discord interactions) ------------------------------------------------------
+
+def _signed(message: bytes):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    k = Ed25519PrivateKey.generate()
+    pub = k.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+    return pub, k.sign(message).hex(), k
+
+
+def test_ed25519_rejects_tampering_and_other_keys():
+    msg = b"1700000000" + b'{"type":3}'
+    pub, sig, _ = _signed(msg)
+    other_pub, other_sig, _ = _signed(msg)
+    assert not crypto.verify_ed25519(pub, msg + b" ", sig)          # body changed
+    assert not crypto.verify_ed25519(pub, b"1700000001" + msg[10:], sig)   # timestamp changed
+    assert not crypto.verify_ed25519(other_pub, msg, sig)          # another application's key
+    assert not crypto.verify_ed25519(pub, msg, other_sig)
+    assert crypto.verify_ed25519(pub, msg, sig)
+    assert crypto.verify_ed25519(pub.upper(), msg, sig.upper())    # hex case doesn't matter
+
+
+@pytest.mark.parametrize("pub,sig", [("", "00" * 64), ("zz" * 32, "00" * 64), ("00" * 31, "00" * 64),
+                                     ("00" * 32, ""), ("00" * 32, "00" * 63), ("00" * 32, "gg" * 64),
+                                     (None, "00" * 64), ("00" * 32, None)])
+def test_ed25519_malformed_input_is_false_not_an_error(pub, sig):
+    assert crypto.verify_ed25519(pub, b"x", sig) is False
