@@ -293,6 +293,76 @@ def cmd_call(args: argparse.Namespace) -> None:
         hub.close()
 
 
+def cmd_proxy_init(args: argparse.Namespace) -> None:
+    """Write a starter .swproxy mapping for an MCP server, from its live tool list, to check and then upload."""
+    import getpass
+    from .proxy import EXTENSION as PX, NAME_RE, SECRET_RE, HttpUpstream, MappingError, StdioUpstream, \
+        UpstreamError, draft_mapping, resolve
+    name = args.name
+    if not NAME_RE.match(name):
+        _die("NAME: lowercase letters, digits and _, starting with a letter (e.g. acme)")
+    if bool(args.command) == bool(args.url):
+        _die("give the server as --command PROGRAM (a local MCP server) or --url https://... (a remote one)")
+
+    def pairs(values: list[str] | None, what: str) -> dict[str, str]:
+        out = {}
+        for v in values or []:
+            k, sep, secret = v.partition("=")
+            if not sep or not k or not SECRET_RE.match(secret):
+                _die(f"{what} {v!r}: use NAME=SECRET_NAME (the secret's name in aiSecurityWarden, not its value)")
+            out[k] = secret
+        return out
+    env, header_secrets = pairs(args.env, "--env"), pairs(args.header, "--header")
+    if args.bearer and not SECRET_RE.match(args.bearer):
+        _die("--bearer takes the secret's name in aiSecurityWarden, e.g. ACME_TOKEN")
+    if args.command and (header_secrets or args.bearer):
+        _die("--header and --bearer are for --url servers; use --env for a --command server")
+    if args.url and env:
+        _die("--env is for --command servers; use --header or --bearer for a --url server")
+    headers = {k: f"${{secret:{v}}}" for k, v in header_secrets.items()}
+    if args.bearer:
+        headers["Authorization"] = f"Bearer ${{secret:{args.bearer}}}"
+    secrets = sorted(set(env.values()) | set(header_secrets.values()) | ({args.bearer} if args.bearer else set()))
+    if args.command:
+        upstream = {"stdio": {"command": args.command, "args": list(args.arg or []),
+                              "env": {k: f"${{secret:{v}}}" for k, v in env.items()}}}
+    else:
+        upstream = {"http": {"url": args.url, "headers": headers}}
+    out = args.output or f"{name}{PX}"
+    if os.path.exists(out) and not args.force:
+        _die(f"{out} already exists (use --force to replace it)")
+
+    # the secrets' values, only to connect now: from the environment (same name) or typed at a prompt
+    values: dict[str, str] = {}
+    for s in secrets:
+        values[s] = os.environ.get(s) or getpass.getpass(f"{s} (only used now, to read the tool list; not saved): ")
+    try:
+        if args.command:
+            u = StdioUpstream(args.command, list(args.arg or []), {k: values[s] for k, s in env.items()})
+        else:
+            u = HttpUpstream(args.url, {k: resolve(v, lambda n: values[n]) for k, v in headers.items()})
+        u.start()
+        tools = u.tools()
+        u.close()
+    except UpstreamError as e:
+        _die(f"couldn't read the server's tools: {e}")
+    try:
+        mapping, report = draft_mapping(name, args.title or name.capitalize(), upstream, secrets, tools)
+    except MappingError as e:
+        _die(str(e))
+    with open(out, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(mapping, f, indent=1, ensure_ascii=False)
+        f.write("\n")
+    width = max([len(r[0]) for r in report] + [10])
+    print(f"{len(report)} tools from the server:")
+    for tname, action, risk, why in report:
+        print(f"  {tname:<{width}}  {action:<40} {risk:<6}  {why}")
+    print(f"\nWrote {out}. Check each tool's risk (high: always asks; the server's hints aren't trusted for you),\n"
+          "add summaries and scopes if you like (docs/mcp-proxy.md), then upload it on the aiSecurityWarden website\n"
+          f"(Connectors) and add the secret{'s' if len(secrets) != 1 else ''} {', '.join(secrets) or '(none)'} to the "
+          "project.")
+
+
 def cmd_pack(args: argparse.Namespace) -> None:
     """Pack a connector into one file to upload on the SecurityWarden website (Connectors)."""
     cls = load_connector(args.connector_name)
@@ -420,6 +490,19 @@ def main(argv: list[str] | None = None) -> None:
     nc.add_argument("--dir", default=".", help="where to create the project folder (default: here)")
     nc.add_argument("--title", help="the application's display name, e.g. Notion")
     nc.set_defaults(fn=cmd_new_connector)
+    pi = sub.add_parser("proxy-init", help="write a starter .swproxy mapping for an MCP server, from its tool list")
+    pi.add_argument("name", help="short name, lowercase: prefixes its tools and actions (e.g. acme)")
+    pi.add_argument("--title", help="display name, e.g. Acme")
+    pi.add_argument("--command", help="a local MCP server: the program to run (stdio)")
+    pi.add_argument("--arg", action="append", help="an argument for --command (repeat)")
+    pi.add_argument("--env", action="append", metavar="VAR=SECRET",
+                    help="give the program a secret: environment variable VAR = the aiSecurityWarden secret SECRET")
+    pi.add_argument("--url", help="a remote MCP server: its https URL (Streamable HTTP)")
+    pi.add_argument("--bearer", metavar="SECRET", help="send the secret SECRET as 'Authorization: Bearer ...'")
+    pi.add_argument("--header", action="append", metavar="HEADER=SECRET", help="send the secret SECRET in HEADER")
+    pi.add_argument("-o", "--output", help="file to write (default: NAME.swproxy)")
+    pi.add_argument("--force", action="store_true", help="replace the file if it exists")
+    pi.set_defaults(fn=cmd_proxy_init)
     pk = sub.add_parser("pack", help="pack a connector into one file to upload on the SecurityWarden website")
     pk.add_argument("connector_name", help="installed connector name, or package.module:ClassName")
     pk.add_argument("-o", "--output", help=f"file to write (default: NAME{EXTENSION})")

@@ -323,3 +323,37 @@ def test_our_approval_note_starts_a_new_sentence(run):
     assert desc.startswith("Echo the arguments. Needs the user's approval")
     hub2, _ = run(m=mapping(tools={"echo": {"action": "gh.thing.echo", "risk": "medium", "description": "No stop"}}))
     assert next(t for t in hub2.list_tools() if t["name"] == "gh_echo")["description"].startswith("No stop. Needs")
+
+
+def test_proxy_init_drafts_a_mapping_from_the_live_tools(tmp_path, monkeypatch, capsys):
+    import argparse
+    from securitywarden.mcp import cli
+    monkeypatch.setenv("GITHUB_PAT", "ghp_test")              # the value comes from the environment or a prompt
+    out = tmp_path / "fake.swproxy"
+    args = argparse.Namespace(name="fake", title="Fake", command=sys.executable,
+                              arg=[os.path.join(HERE, "fake_upstream.py")], env=["GITHUB_PERSONAL_ACCESS_TOKEN=GITHUB_PAT"],
+                              url=None, bearer=None, header=None, output=str(out), force=False)
+    cli.cmd_proxy_init(args)
+    m = validate_mapping(json.loads(out.read_text()))
+    assert m["secrets"] == ["GITHUB_PAT"]
+    assert m["upstream"]["stdio"]["env"] == {"GITHUB_PERSONAL_ACCESS_TOKEN": "${secret:GITHUB_PAT}"}
+    assert "ghp_test" not in out.read_text()
+    t = m["tools"]
+    assert t["get_thing"] == {"action": "fake.read.get_thing", "risk": "low"}
+    assert t["nuke"] == {"action": "fake.nuke", "risk": "high"}                 # destructive wins over read-only
+    assert t["echo"] == {"action": "fake.echo", "risk": "medium", "scope": {"owner": "{owner}", "repo": "{owner}/{repo}"}}
+    printed = capsys.readouterr().out
+    assert "6 tools from the server" in printed and "no hint from the server: check it" in printed
+    with pytest.raises(SystemExit):                                              # never overwrites by accident
+        cli.cmd_proxy_init(args)
+    with pytest.raises(SystemExit):                                              # a secret's value isn't a name
+        cli.cmd_proxy_init(argparse.Namespace(**{**vars(args), "env": ["T=ghp_abc-123"], "force": True}))
+
+
+def test_drafted_github_style_tools_get_a_repo_scope():
+    from securitywarden.mcp.proxy import draft_mapping
+    m, report = draft_mapping("acme", "Acme", {"http": {"url": "https://x.example/mcp", "headers": {}}}, [],
+                              [{"name": "make-PR", "inputSchema": {"properties": {"owner": {}, "repo": {}}}}])
+    assert m["tools"]["make-PR"] == {"action": "acme.make_pr", "risk": "medium",
+                                     "scope": {"owner": "{owner}", "repo": "{owner}/{repo}"}}
+    assert report == [("make-PR", "acme.make_pr", "medium", "no hint from the server: check it")]
