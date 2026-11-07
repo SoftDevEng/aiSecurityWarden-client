@@ -76,7 +76,8 @@ def test_the_github_mapping_ships_and_lists_its_tools():
     assert cls.name == "github" and cls.secrets == ("GITHUB_PAT",)
     entry = next(c for c in catalog.builtin_catalog() if c["name"] == "github")
     actions = {t["action"] for t in entry["tools"]}
-    assert {"github.pr.merge", "github.read.file", "github.file.write"} <= actions
+    assert {"github.pr.merge", "github.read.get_file_contents", "github.file.write", "github.repo.delete"} <= actions
+    assert not any(a.startswith("github.read.") and "secret" in a for a in actions)   # findings can hold secrets
     assert all(not a.startswith("github.unmapped") for a in actions)
 
 
@@ -271,3 +272,54 @@ def test_http_upstream_refusals():
     u = http_upstream(lambda req: httpx.Response(401))
     with pytest.raises(UpstreamError, match="refused the credential"):
         u.start()
+
+
+def test_the_github_proxy_can_be_named_in_the_mcp_settings():
+    from securitywarden.mcp.cli import load_connector
+    from securitywarden.mcp.proxy import ProxyConnector
+    cls = load_connector("github")
+    assert issubclass(cls, ProxyConnector) and cls.name == "github"
+
+
+def test_tools_live_lists_what_the_agent_sees_and_the_pending_tool_approval(tmp_path, monkeypatch, capsys):
+    import argparse
+    from securitywarden.mcp import cli
+    monkeypatch.setenv("FAKE_LOG", str(tmp_path / "log"))
+    sw = FakeSecurityWarden({"gh.*": "allow"}, secrets={"GITHUB_PAT": "ghp_test"}, pins=True)
+    monkeypatch.setattr(cli, "_hub", lambda args, cfg: make_hub(proxy_class(mapping()), sw))
+    args = argparse.Namespace(config=None, connector=None, live=True)
+    cli.cmd_tools(args)
+    out = capsys.readouterr().out
+    assert "check_approval" in out and "gh_echo" not in out and "waiting for you to approve its tools" in out
+    rid = next(k for k, r in sw.requests.items() if r["action"] == "gh.tools.approve")
+    assert rid in out
+
+
+def test_a_waiting_tool_approval_is_finished_by_the_next_sw_mcp_process(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setenv("FAKE_LOG", str(tmp_path / "log"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    sw = FakeSecurityWarden({"gh.*": "allow"}, secrets={"GITHUB_PAT": "ghp_test"}, pins=True)
+    sw.cred = SimpleNamespace(id="tok_abcdefgh")
+    first = make_hub(proxy_class(mapping()), sw)            # e.g. "sw-mcp tools --live", then it exits
+    assert names(first) == {"check_approval"}
+    first.close()
+    pending = tmp_path / "cfg" / "securitywarden" / "proxy-pending" / "tok_abcdefgh-gh.json"
+    assert pending.exists() and oct(pending.stat().st_mode & 0o777) == "0o600"
+    sw.approve(next(k for k, r in sw.requests.items() if r["action"] == "gh.tools.approve"))
+    ProxyConnector._bound.clear()                             # a new process: nothing in memory
+    second = make_hub(proxy_class(mapping()), sw)
+    try:
+        assert "gh_echo" in names(second)                     # finished the same request, didn't ask again
+        assert sum(r["action"] == "gh.tools.approve" for r in sw.requests.values()) == 1
+        assert not pending.exists()
+    finally:
+        second.close()
+
+
+def test_our_approval_note_starts_a_new_sentence(run):
+    hub, _sw = run()
+    desc = next(t for t in hub.list_tools() if t["name"] == "gh_echo")["description"]
+    assert desc.startswith("Echo the arguments. Needs the user's approval")
+    hub2, _ = run(m=mapping(tools={"echo": {"action": "gh.thing.echo", "risk": "medium", "description": "No stop"}}))
+    assert next(t for t in hub2.list_tools() if t["name"] == "gh_echo")["description"].startswith("No stop. Needs")

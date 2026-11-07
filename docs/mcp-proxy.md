@@ -19,7 +19,10 @@ in. You can upload your own on the website's **Connectors** page.
    Manage). Then **AI agent actions** → **Use the suggested GitHub rules** and adjust them.
 5. Restart the agent (or wait a minute: `sw-mcp` picks up connectors by itself). The first time, `sw-mcp` asks you
    to **approve GitHub's tool list** (a "GitHub: allow N new or changed tools" request). Approve it and the tools
-   appear.
+   appear. Check from a terminal with `sw-mcp tools --live`.
+6. **Start a new session** with the agent. Most agents fix a session's tools when it starts, so a session that was
+   already open keeps its old tool list. In Hermes, `/new` in the same session isn't enough: open a new session.
+   The same applies after you approve later tool changes.
 
 To use GitHub's hosted endpoint instead of the local program, set `SW_PROXY_TRANSPORT=github=http` in the MCP
 server's environment (the token then never leaves `sw-mcp`'s memory; see below).
