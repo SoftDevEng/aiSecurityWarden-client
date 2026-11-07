@@ -679,6 +679,14 @@ recovery_auth = HKDF(recovery_key, "securitywarden/v1/recovery-auth") -> sent on
 recovery_wrap = HKDF(recovery_key, "securitywarden/v1/recovery-wrap")
 wrapped_key_recovery = AES-GCM(recovery_wrap, account_key, AAD "sw1|account-key|recovery|<user id>")
 
+passkey (optional, per account; one wrapped copy per passkey that supports the WebAuthn PRF extension):
+  credential_id = base64url (no padding) of the raw WebAuthn credential id
+  prf_salt  = SHA-256("sw1|passkey-prf|v1")   -> prf.eval.first (the browser hashes it again); the same for every
+              passkey, since a sign-in that doesn't name the account can't know which passkey answers
+  prf_out   = the 32 bytes the authenticator returns, after user verification; never leaves the browser
+  pk_wrap   = HKDF(prf_out, "securitywarden/v1/passkey-wrap")
+  wrapped_key_passkey = AES-GCM(pk_wrap, account_key, AAD "sw1|account-key|passkey|<user id>|<credential_id>")
+
 project key of an account's project:
   AES-GCM(HKDF(account_key, "securitywarden/v1/account-pkey"), project_key, AAD "sw1|pkey-user|<user id>|<project id>")
 ```
@@ -722,6 +730,35 @@ browser is a planned upgrade.
   the recovery key an account's data can't be recovered by anyone, including the operator.
 - **Password change** `POST /v1/account/password` (signed in, with the current `auth_key`): new salt and
   wrapped key; the account key and everything under it stay the same. Other sessions end.
+
+### Passkeys
+
+Opt-in per account (Account → Passkeys); an account without a passkey can't be signed into with one, and the
+passkey endpoints answer it as any wrong attempt. WebAuthn with **user verification required** (fingerprint,
+face or device PIN), RP ID = the site's host name, origin checked, attestation `none`, algorithms ES256, EdDSA
+and RS256. The server stores the credential id, its COSE public key, the signature counter, the backup flags,
+a name, and `wrapped_key_passkey` when the passkey supports PRF. It never receives `prf_out` or any key.
+
+- **Add** `POST /v1/account/passkeys/register/start {auth_key, code?}` (full session; the current password
+  proof, plus a 2FA code when 2FA is on) returns WebAuthn creation options and a 5-minute challenge id;
+  `…/register/finish {challenge_id, credential, name}` verifies the attestation (`clientDataJSON` type,
+  challenge and origin; `authData` RP ID hash, UP and UV flags) and stores the public key. The browser then
+  calls `get` with the PRF salt and, if the authenticator returned a PRF value, uploads `wrapped_key_passkey`
+  with `PUT /v1/account/passkeys/{id}/wrapped-key` (needs a fresh assertion by that passkey).
+- **Settings** `PUT /v1/account/passkeys/settings {signin, second_factor, approve}`. Removing the last passkey
+  turns all three off.
+- **Sign in** `POST /v1/account/passkeys/signin/start {email?}` then `…/signin/finish {challenge_id,
+  credential}`. Only with `signin` on. A passkey with a wrapped key signs in fully (the passkey is possession
+  plus biometric, so it also stands for the second factor) and returns `wrapped_key_passkey` instead of
+  `wrapped_key_password`; without one, the page asks for the password and treats the passkey as the second factor.
+- **Second factor** `POST /v1/account/signin/passkey` on a code-stage session, in place of the 6-digit code
+  (with `second_factor` on).
+- **Approve** with `approve` on, deciding a request on the website needs a fresh assertion (challenge purpose
+  `approve`, bound to the request id). Telegram, ntfy and Discord buttons can't ask for one.
+- The signature counter must increase when the authenticator keeps one (a non-zero counter that doesn't go up is
+  refused as a possible clone). Failures count against the same limits as passwords and go in the activity log.
+- Password changes and recovery leave the passkey copies alone (the account key doesn't change). Disabling or
+  deleting an account removes its passkeys.
 
 ### Sessions
 

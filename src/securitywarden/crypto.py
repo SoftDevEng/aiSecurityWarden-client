@@ -346,6 +346,32 @@ def unwrap_account_key_with_recovery(blob: str, recovery_key: bytes, user_id: st
                  _aad_account_key(user_id, "recovery"))
 
 
+def passkey_prf_salt() -> bytes:
+    """The PRF input the browser passes (WebAuthn hashes it again on its side). The same for every passkey: the
+    PRF output already differs per passkey, and a sign-in that doesn't name the account can't know which passkey
+    will answer. The wrap's AAD binds the user and the credential id."""
+    return hashlib.sha256(f"{PREFIX}|passkey-prf|v1".encode("utf-8")).digest()
+
+
+def _passkey_wrap(prf_out: bytes) -> bytes:
+    if len(prf_out) != KEY_LEN:
+        raise CryptoError("the passkey's PRF output must be 32 bytes")
+    return hkdf(prf_out, b"securitywarden/v1/passkey-wrap")
+
+
+def _aad_passkey(user_id: str, credential_id: str) -> str:
+    return f"{_aad_account_key(user_id, 'passkey')}|{credential_id}"
+
+
+def wrap_account_key_with_passkey(account_key: bytes, prf_out: bytes, user_id: str, credential_id: str) -> str:
+    """credential_id: base64url (no padding) of the raw WebAuthn credential id."""
+    return seal(_passkey_wrap(prf_out), account_key, _aad_passkey(user_id, credential_id))
+
+
+def unwrap_account_key_with_passkey(blob: str, prf_out: bytes, user_id: str, credential_id: str) -> bytes:
+    return open_(_passkey_wrap(prf_out), blob, _aad_passkey(user_id, credential_id))
+
+
 def _aad_pkey_user(user_id: str, project_id: str) -> str:
     return f"{PREFIX}|pkey-user|{user_id}|{project_id}"
 

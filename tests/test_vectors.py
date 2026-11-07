@@ -81,6 +81,11 @@ def test_account_vectors(v):
     for bad in a["bad_kdfs"]:
         with pytest.raises(ValueError):
             crypto.check_kdf(bad)
+    assert len(a["passkeys"]) == 2
+    for k in a["passkeys"]:
+        assert crypto.passkey_prf_salt().hex() == k["prf_salt_hex"]
+        prf = bytes.fromhex(k["prf_hex"])
+        assert crypto.unwrap_account_key_with_passkey(k["wrapped_key_passkey"], prf, uid, k["credential_id"]) == acct
 
 
 def test_account_vectors_must_fail(v):
@@ -92,5 +97,8 @@ def test_account_vectors_must_fail(v):
                 crypto.unwrap_account_key_with_password(c["blob"], bytes.fromhex(c["master_hex"]), c["user_id"])
             elif c["kind"] == "recovery":
                 crypto.unwrap_account_key_with_recovery(c["blob"], bytes.fromhex(c["key_hex"]), c["user_id"])
+            elif c["kind"] == "passkey":
+                crypto.unwrap_account_key_with_passkey(c["blob"], bytes.fromhex(c["prf_hex"]), c["user_id"],
+                                                       c["credential_id"])
             else:
                 crypto.unwrap_project_key_for_account(c["blob"], acct, c["user_id"], c["project_id"])

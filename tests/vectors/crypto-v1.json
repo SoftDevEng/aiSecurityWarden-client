@@ -636,6 +636,22 @@
     "nonce_hex": "4a2122a31c5168fd35f5862e"
    }
   ],
+  "passkeys": [
+   {
+    "credential_id": "LDpnjlNN591s1wqWzRleIg",
+    "prf_salt_hex": "aebf821fbdc5c5167e65bd535739207e6d921ee8de6925c3a6c93bad868f16d8",
+    "prf_hex": "2d865e136addc7099804dcd7eba5426b03ff5ba661e939514fae7c776a5c66cf",
+    "wrapped_key_passkey": "v1.VqTlavZgSHNtwHJxkjfHY9cYngO8YJ2y0l0Rd90APD_ynV6qRxs7tBiUagUHkLJ2mJGyxx3H-xB9ai0X",
+    "nonce_hex": "56a4e56af66048736dc07271"
+   },
+   {
+    "credential_id": "ppA7v02Di13VMiwPlZBlW-nNv_yOByDRPCW3361ilNg",
+    "prf_salt_hex": "aebf821fbdc5c5167e65bd535739207e6d921ee8de6925c3a6c93bad868f16d8",
+    "prf_hex": "33c2093b742776916e904e438d77f2de0d1112b150b35f73421f21803f31c7ee",
+    "wrapped_key_passkey": "v1.Hm2mkoFVC0Op6rlIPLPS-He8p_wvsCaQzGpeM61F8q_kRlHZSnVoPitLUDg_FReMaKYj-04JDkRgQzOQ",
+    "nonce_hex": "1e6da69281550b43a9eab948"
+   }
+  ],
   "bad_kdfs": [
    null,
    {},
@@ -688,6 +704,38 @@
     "kind": "recovery",
     "user_id": "CMgVEGrkeGRlQFJPzUNDkQ",
     "key_hex": "b12da5c38e0752ed58cc1f8272b42dc0b1b775d3fe0b57012ce01a2b5a0d488c",
+    "blob": "v1.WCOPSp9yVOyglWPkJblwBOgfNWNDVH9xRAJw5PL6r8EhlLtNSxf-1FgrXw-4hhu-X191CFVikP5_fLCE"
+   },
+   {
+    "why": "passkey blob under another credential id",
+    "kind": "passkey",
+    "user_id": "CMgVEGrkeGRlQFJPzUNDkQ",
+    "credential_id": "ppA7v02Di13VMiwPlZBlW-nNv_yOByDRPCW3361ilNg",
+    "prf_hex": "2d865e136addc7099804dcd7eba5426b03ff5ba661e939514fae7c776a5c66cf",
+    "blob": "v1.VqTlavZgSHNtwHJxkjfHY9cYngO8YJ2y0l0Rd90APD_ynV6qRxs7tBiUagUHkLJ2mJGyxx3H-xB9ai0X"
+   },
+   {
+    "why": "passkey blob with another passkey's PRF",
+    "kind": "passkey",
+    "user_id": "CMgVEGrkeGRlQFJPzUNDkQ",
+    "credential_id": "LDpnjlNN591s1wqWzRleIg",
+    "prf_hex": "33c2093b742776916e904e438d77f2de0d1112b150b35f73421f21803f31c7ee",
+    "blob": "v1.VqTlavZgSHNtwHJxkjfHY9cYngO8YJ2y0l0Rd90APD_ynV6qRxs7tBiUagUHkLJ2mJGyxx3H-xB9ai0X"
+   },
+   {
+    "why": "passkey blob for another user",
+    "kind": "passkey",
+    "user_id": "cz9jgSwL0tyuKqubjaOMxQ",
+    "credential_id": "LDpnjlNN591s1wqWzRleIg",
+    "prf_hex": "2d865e136addc7099804dcd7eba5426b03ff5ba661e939514fae7c776a5c66cf",
+    "blob": "v1.VqTlavZgSHNtwHJxkjfHY9cYngO8YJ2y0l0Rd90APD_ynV6qRxs7tBiUagUHkLJ2mJGyxx3H-xB9ai0X"
+   },
+   {
+    "why": "password blob opened as a passkey blob",
+    "kind": "passkey",
+    "user_id": "CMgVEGrkeGRlQFJPzUNDkQ",
+    "credential_id": "LDpnjlNN591s1wqWzRleIg",
+    "prf_hex": "ba7ad472624e0ee70f669ccc69d3f51d56e57e6098e77881f0b03b77703ebe00",
     "blob": "v1.WCOPSp9yVOyglWPkJblwBOgfNWNDVH9xRAJw5PL6r8EhlLtNSxf-1FgrXw-4hhu-X191CFVikP5_fLCE"
    },
    {

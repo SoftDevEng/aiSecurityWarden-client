@@ -204,6 +204,16 @@ def build() -> dict[str, Any]:
         except crypto.CryptoError:
             continue
         raise SystemExit(f"generator bug: recovery text {t!r} parses")
+    # passkeys (DESIGN.md "Passkeys"): the PRF output stands in for what the authenticator returns
+    v["accounts"]["passkeys"] = []
+    for i in range(2):
+        cid = crypto.b64e(key(f"passkey-cred{i}")[:16 + 16 * i])
+        prf = key(f"passkey-prf{i}")
+        with seeded(f"passkey-{i}"):
+            kblob = crypto.wrap_account_key_with_passkey(acct_key, prf, uid, cid)
+        v["accounts"]["passkeys"].append({
+            "credential_id": cid, "prf_salt_hex": crypto.passkey_prf_salt().hex(), "prf_hex": prf.hex(),
+            "wrapped_key_passkey": kblob, "nonce_hex": crypto.b64d(kblob[3:])[:12].hex()})
     with seeded("acct-pkey"):
         pblob = crypto.wrap_project_key_for_account(pkey, acct_key, uid, pid)
     v["accounts"]["project_wraps"].append({"project_id": pid, "project_key_hex": pkey.hex(), "blob": pblob,
@@ -229,11 +239,33 @@ def build() -> dict[str, Any]:
          "master_hex": rec_key.hex(), "blob": rblob},
         {"why": "password blob opened with the recovery key", "kind": "recovery", "user_id": uid,
          "key_hex": rec_key.hex(), "blob": pw0["wrapped_key_password"]},
+        {"why": "passkey blob under another credential id", "kind": "passkey", "user_id": uid,
+         "credential_id": "PASSKEY1", "prf_hex": "PRF0", "blob": "BLOB0"},
+        {"why": "passkey blob with another passkey's PRF", "kind": "passkey", "user_id": uid,
+         "credential_id": "PASSKEY0", "prf_hex": "PRF1", "blob": "BLOB0"},
+        {"why": "passkey blob for another user", "kind": "passkey", "user_id": crypto.b64e(key("user2")[:16]),
+         "credential_id": "PASSKEY0", "prf_hex": "PRF0", "blob": "BLOB0"},
+        {"why": "password blob opened as a passkey blob", "kind": "passkey", "user_id": uid,
+         "credential_id": "PASSKEY0", "prf_hex": "MASTER0", "blob": pw0["wrapped_key_password"]},
         {"why": "account project key for another project", "kind": "pkey", "user_id": uid,
          "project_id": crypto.b64e(key("p2")[:16]), "blob": pblob},
         {"why": "account project key for another user", "kind": "pkey", "user_id": crypto.b64e(key("user2")[:16]),
          "project_id": pid, "blob": pblob},
     ]
+
+    pks = v["accounts"]["passkeys"]
+    subst = {"PASSKEY0": pks[0]["credential_id"], "PASSKEY1": pks[1]["credential_id"], "PRF0": pks[0]["prf_hex"],
+             "PRF1": pks[1]["prf_hex"], "BLOB0": pks[0]["wrapped_key_passkey"], "MASTER0": pw0["master_hex"]}
+    for m in v["accounts"]["must_fail"]:
+        if m["kind"] == "passkey":
+            for f in ("credential_id", "prf_hex", "blob"):
+                m[f] = subst.get(m[f], m[f])
+            try:
+                crypto.unwrap_account_key_with_passkey(m["blob"], bytes.fromhex(m["prf_hex"]), m["user_id"],
+                                                       m["credential_id"])
+            except crypto.CryptoError:
+                continue
+            raise SystemExit(f"generator bug: {m['why']} opens")
 
     # email and password rules (account.py), so the browser checks exactly the same
     emails = ["alice@example.com", "  Alice@Example.COM ", "e\u0301mile@example.com", "\u00e9mile@example.com",
