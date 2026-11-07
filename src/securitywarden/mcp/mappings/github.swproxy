@@ -2,7 +2,7 @@
  "format": "sw-proxy/1",
  "name": "github",
  "title": "GitHub",
- "description": "GitHub's official MCP server (github-mcp-server), with every write approved through aiSecurityWarden. Keep a fine-grained personal access token, limited to the repositories the agent needs, as the project secret GITHUB_PAT.",
+ "description": "GitHub's official MCP server (github-mcp-server 2.x), with every write approved through aiSecurityWarden. Keep a fine-grained personal access token, limited to the repositories the agent needs, as the project secret GITHUB_PAT.",
  "secrets": [
   "GITHUB_PAT"
  ],
@@ -24,153 +24,43 @@
   }
  },
  "tools": {
-  "get_me": {
-   "action": "github.read.me",
+  "actions_get": {
+   "action": "github.read.actions_get",
    "risk": "low"
   },
-  "search_repositories": {
-   "action": "github.read.repos",
+  "actions_list": {
+   "action": "github.read.actions_list",
    "risk": "low"
   },
-  "search_code": {
-   "action": "github.read.code",
-   "risk": "low"
-  },
-  "search_users": {
-   "action": "github.read.users",
-   "risk": "low"
-  },
-  "get_file_contents": {
-   "action": "github.read.file",
-   "risk": "low"
-  },
-  "list_commits": {
-   "action": "github.read.commits",
-   "risk": "low"
-  },
-  "get_commit": {
-   "action": "github.read.commit",
-   "risk": "low"
-  },
-  "list_branches": {
-   "action": "github.read.branches",
-   "risk": "low"
-  },
-  "list_tags": {
-   "action": "github.read.tags",
-   "risk": "low"
-  },
-  "get_tag": {
-   "action": "github.read.tag",
-   "risk": "low"
-  },
-  "list_issues": {
-   "action": "github.read.issues",
-   "risk": "low"
-  },
-  "get_issue": {
-   "action": "github.read.issue",
-   "risk": "low"
-  },
-  "search_issues": {
-   "action": "github.read.issues",
-   "risk": "low"
-  },
-  "get_issue_comments": {
-   "action": "github.read.issue_comments",
-   "risk": "low"
-  },
-  "list_pull_requests": {
-   "action": "github.read.prs",
-   "risk": "low"
-  },
-  "get_pull_request": {
-   "action": "github.read.pr",
-   "risk": "low"
-  },
-  "get_pull_request_files": {
-   "action": "github.read.pr_files",
-   "risk": "low"
-  },
-  "get_pull_request_diff": {
-   "action": "github.read.pr_diff",
-   "risk": "low"
-  },
-  "get_pull_request_status": {
-   "action": "github.read.pr_status",
-   "risk": "low"
-  },
-  "get_pull_request_comments": {
-   "action": "github.read.pr_comments",
-   "risk": "low"
-  },
-  "get_pull_request_reviews": {
-   "action": "github.read.pr_reviews",
-   "risk": "low"
-  },
-  "search_pull_requests": {
-   "action": "github.read.prs",
-   "risk": "low"
-  },
-  "list_notifications": {
-   "action": "github.read.notifications",
-   "risk": "low"
-  },
-  "list_releases": {
-   "action": "github.read.releases",
-   "risk": "low"
-  },
-  "get_latest_release": {
-   "action": "github.read.releases",
-   "risk": "low"
-  },
-  "create_issue": {
-   "action": "github.issue.create",
-   "risk": "medium",
+  "actions_run_trigger": {
+   "action": "github.actions.run",
+   "risk": "high",
    "scope": {
     "owner": "{owner}",
     "repo": "{owner}/{repo}"
    },
    "summary": {
-    "title": "Open an issue in {owner}/{repo}",
-    "fields": [
-     [
-      "Title",
-      "{title}"
-     ],
-     [
-      "Labels",
-      "{labels}"
-     ],
-     [
-      "Assignees",
-      "{assignees}"
-     ]
-    ],
-    "preview": "{body}"
+    "title": "{method} a workflow run in {owner}/{repo}",
+    "fields": []
    }
   },
-  "update_issue": {
-   "action": "github.issue.update",
+  "add_comment_to_pending_review": {
+   "action": "github.pr.review",
    "risk": "medium",
    "scope": {
     "owner": "{owner}",
     "repo": "{owner}/{repo}"
    },
    "summary": {
-    "title": "Change issue #{issue_number} in {owner}/{repo}",
+    "title": "Add a review comment in {owner}/{repo}",
     "fields": [
      [
-      "Title",
-      "{title}"
+      "Pull request",
+      "#{pullNumber}"
      ],
      [
-      "State",
-      "{state}"
-     ],
-     [
-      "Labels",
-      "{labels}"
+      "File",
+      "{path}"
      ]
     ],
     "preview": "{body}"
@@ -184,8 +74,105 @@
     "repo": "{owner}/{repo}"
    },
    "summary": {
-    "title": "Comment on issue #{issue_number} in {owner}/{repo}",
+    "title": "Comment on #{issue_number} in {owner}/{repo}",
+    "fields": [],
     "preview": "{body}"
+   }
+  },
+  "add_reply_to_pull_request_comment": {
+   "action": "github.pr.review",
+   "risk": "medium",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "Reply on pull request #{pullNumber} in {owner}/{repo}",
+    "fields": [],
+    "preview": "{body}"
+   }
+  },
+  "assign_copilot_to_issue": {
+   "action": "github.copilot.assign",
+   "risk": "medium",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "Assign Copilot to #{issue_number} in {owner}/{repo}",
+    "fields": []
+   }
+  },
+  "assign_copilot_to_issue_with_intent": {
+   "action": "github.copilot.assign",
+   "risk": "medium",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "Assign Copilot to #{issue_number} in {owner}/{repo}",
+    "fields": []
+   }
+  },
+  "create_branch": {
+   "action": "github.branch.create",
+   "risk": "medium",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}",
+    "branch": "{owner}/{repo}/{branch}"
+   },
+   "summary": {
+    "title": "Create branch {branch} in {owner}/{repo}",
+    "fields": [
+     [
+      "From",
+      "{from_branch}"
+     ]
+    ]
+   }
+  },
+  "create_gist": {
+   "action": "github.gist.write",
+   "risk": "medium",
+   "summary": {
+    "title": "Create a gist",
+    "fields": [
+     [
+      "Public",
+      "{public}"
+     ],
+     [
+      "File",
+      "{filename}"
+     ]
+    ],
+    "preview": "{content}"
+   }
+  },
+  "create_or_update_file": {
+   "action": "github.file.write",
+   "risk": "high",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}",
+    "branch": "{owner}/{repo}/{branch}"
+   },
+   "summary": {
+    "title": "Write {path} in {owner}/{repo}",
+    "fields": [
+     [
+      "Branch",
+      "{branch}"
+     ],
+     [
+      "Commit message",
+      "{message}"
+     ]
+    ],
+    "preview": "{content}"
    }
   },
   "create_pull_request": {
@@ -218,16 +205,244 @@
     "preview": "{body}"
    }
   },
-  "update_pull_request": {
-   "action": "github.pr.update",
+  "create_pull_request_with_copilot": {
+   "action": "github.copilot.assign",
    "risk": "medium",
    "scope": {
     "owner": "{owner}",
     "repo": "{owner}/{repo}"
    },
    "summary": {
-    "title": "Change pull request #{pullNumber} in {owner}/{repo}",
+    "title": "Ask Copilot to open a pull request in {owner}/{repo}",
     "fields": [
+     [
+      "Title",
+      "{title}"
+     ]
+    ],
+    "preview": "{problem_statement}"
+   }
+  },
+  "create_repository": {
+   "action": "github.repo.create",
+   "risk": "high",
+   "summary": {
+    "title": "Create repository {name}",
+    "fields": [
+     [
+      "Private",
+      "{private}"
+     ],
+     [
+      "Organization",
+      "{organization}"
+     ]
+    ],
+    "preview": "{description}"
+   }
+  },
+  "create_repository_ruleset": {
+   "action": "github.repo.settings",
+   "risk": "high",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "Create a ruleset in {owner}/{repo}",
+    "fields": []
+   }
+  },
+  "custom_properties_read": {
+   "action": "github.read.custom_properties_read",
+   "risk": "low"
+  },
+  "custom_properties_write": {
+   "action": "github.repo.settings",
+   "risk": "high",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "Change custom properties of {owner}/{repo}",
+    "fields": []
+   }
+  },
+  "delete_file": {
+   "action": "github.file.delete",
+   "risk": "high",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}",
+    "branch": "{owner}/{repo}/{branch}"
+   },
+   "summary": {
+    "title": "Delete {path} in {owner}/{repo}",
+    "fields": [
+     [
+      "Branch",
+      "{branch}"
+     ],
+     [
+      "Commit message",
+      "{message}"
+     ]
+    ]
+   }
+  },
+  "delete_repository": {
+   "action": "github.repo.delete",
+   "risk": "high",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "DELETE repository {owner}/{repo}",
+    "fields": []
+   }
+  },
+  "discussion_comment_write": {
+   "action": "github.discussion.comment",
+   "risk": "medium",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "{method} a discussion comment in {owner}/{repo}",
+    "fields": [],
+    "preview": "{body}"
+   }
+  },
+  "dismiss_notification": {
+   "action": "github.notification.update",
+   "risk": "low"
+  },
+  "fork_repository": {
+   "action": "github.repo.fork",
+   "risk": "medium",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "Fork {owner}/{repo}",
+    "fields": [
+     [
+      "Into",
+      "{organization}"
+     ]
+    ]
+   }
+  },
+  "get_code_quality_finding": {
+   "action": "github.read.get_code_quality_finding",
+   "risk": "low"
+  },
+  "get_code_scanning_alert": {
+   "action": "github.read.get_code_scanning_alert",
+   "risk": "low"
+  },
+  "get_commit": {
+   "action": "github.read.get_commit",
+   "risk": "low"
+  },
+  "get_copilot_space": {
+   "action": "github.read.get_copilot_space",
+   "risk": "low"
+  },
+  "get_dependabot_alert": {
+   "action": "github.read.get_dependabot_alert",
+   "risk": "low"
+  },
+  "get_discussion": {
+   "action": "github.read.get_discussion",
+   "risk": "low"
+  },
+  "get_discussion_comments": {
+   "action": "github.read.get_discussion_comments",
+   "risk": "low"
+  },
+  "get_file_contents": {
+   "action": "github.read.get_file_contents",
+   "risk": "low"
+  },
+  "get_gist": {
+   "action": "github.read.get_gist",
+   "risk": "low"
+  },
+  "get_global_security_advisory": {
+   "action": "github.security.get_global_security_advisory",
+   "risk": "medium"
+  },
+  "get_job_logs": {
+   "action": "github.read.get_job_logs",
+   "risk": "low"
+  },
+  "get_label": {
+   "action": "github.read.get_label",
+   "risk": "low"
+  },
+  "get_latest_release": {
+   "action": "github.read.get_latest_release",
+   "risk": "low"
+  },
+  "get_me": {
+   "action": "github.read.get_me",
+   "risk": "low"
+  },
+  "get_notification_details": {
+   "action": "github.read.get_notification_details",
+   "risk": "low"
+  },
+  "get_release_by_tag": {
+   "action": "github.read.get_release_by_tag",
+   "risk": "low"
+  },
+  "get_repository_tree": {
+   "action": "github.read.get_repository_tree",
+   "risk": "low"
+  },
+  "get_secret_scanning_alert": {
+   "action": "github.security.get_secret_scanning_alert",
+   "risk": "medium"
+  },
+  "get_tag": {
+   "action": "github.read.get_tag",
+   "risk": "low"
+  },
+  "get_team_members": {
+   "action": "github.read.get_team_members",
+   "risk": "low"
+  },
+  "get_teams": {
+   "action": "github.read.get_teams",
+   "risk": "low"
+  },
+  "github_support_docs_search": {
+   "action": "github.read.github_support_docs_search",
+   "risk": "low"
+  },
+  "issue_read": {
+   "action": "github.read.issue_read",
+   "risk": "low"
+  },
+  "issue_write": {
+   "action": "github.issue.write",
+   "risk": "medium",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "Create or change an issue in {owner}/{repo}",
+    "fields": [
+     [
+      "Issue",
+      "#{issue_number}"
+     ],
      [
       "Title",
       "{title}"
@@ -235,14 +450,126 @@
      [
       "State",
       "{state}"
-     ],
-     [
-      "Into",
-      "{base}"
      ]
     ],
     "preview": "{body}"
    }
+  },
+  "label_write": {
+   "action": "github.label.write",
+   "risk": "medium",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "{method} label {name} in {owner}/{repo}",
+    "fields": []
+   }
+  },
+  "list_branches": {
+   "action": "github.read.list_branches",
+   "risk": "low"
+  },
+  "list_code_scanning_alerts": {
+   "action": "github.read.list_code_scanning_alerts",
+   "risk": "low"
+  },
+  "list_commits": {
+   "action": "github.read.list_commits",
+   "risk": "low"
+  },
+  "list_copilot_spaces": {
+   "action": "github.read.list_copilot_spaces",
+   "risk": "low"
+  },
+  "list_dependabot_alerts": {
+   "action": "github.read.list_dependabot_alerts",
+   "risk": "low"
+  },
+  "list_discussion_categories": {
+   "action": "github.read.list_discussion_categories",
+   "risk": "low"
+  },
+  "list_discussions": {
+   "action": "github.read.list_discussions",
+   "risk": "low"
+  },
+  "list_gists": {
+   "action": "github.read.list_gists",
+   "risk": "low"
+  },
+  "list_global_security_advisories": {
+   "action": "github.security.list_global_security_advisories",
+   "risk": "medium"
+  },
+  "list_issue_fields": {
+   "action": "github.read.list_issue_fields",
+   "risk": "low"
+  },
+  "list_issue_types": {
+   "action": "github.read.list_issue_types",
+   "risk": "low"
+  },
+  "list_issues": {
+   "action": "github.read.list_issues",
+   "risk": "low"
+  },
+  "list_label": {
+   "action": "github.read.list_label",
+   "risk": "low"
+  },
+  "list_notifications": {
+   "action": "github.read.list_notifications",
+   "risk": "low"
+  },
+  "list_org_repository_security_advisories": {
+   "action": "github.security.list_org_repository_security_adv",
+   "risk": "medium"
+  },
+  "list_pull_requests": {
+   "action": "github.read.list_pull_requests",
+   "risk": "low"
+  },
+  "list_releases": {
+   "action": "github.read.list_releases",
+   "risk": "low"
+  },
+  "list_repository_collaborators": {
+   "action": "github.read.list_repository_collaborators",
+   "risk": "low"
+  },
+  "list_repository_security_advisories": {
+   "action": "github.security.list_repository_security_advisor",
+   "risk": "medium"
+  },
+  "list_secret_scanning_alerts": {
+   "action": "github.security.list_secret_scanning_alerts",
+   "risk": "medium"
+  },
+  "list_starred_repositories": {
+   "action": "github.read.list_starred_repositories",
+   "risk": "low"
+  },
+  "list_tags": {
+   "action": "github.read.list_tags",
+   "risk": "low"
+  },
+  "manage_notification_subscription": {
+   "action": "github.notification.update",
+   "risk": "low"
+  },
+  "manage_repository_notification_subscription": {
+   "action": "github.notification.update",
+   "risk": "low",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   }
+  },
+  "mark_all_notifications_read": {
+   "action": "github.notification.update",
+   "risk": "low"
   },
   "merge_pull_request": {
    "action": "github.pr.merge",
@@ -265,26 +592,31 @@
     ]
    }
   },
-  "update_pull_request_branch": {
-   "action": "github.pr.update_branch",
+  "projects_get": {
+   "action": "github.read.projects_get",
+   "risk": "low"
+  },
+  "projects_list": {
+   "action": "github.read.projects_list",
+   "risk": "low"
+  },
+  "projects_write": {
+   "action": "github.project.write",
    "risk": "medium",
    "scope": {
     "owner": "{owner}",
     "repo": "{owner}/{repo}"
    },
    "summary": {
-    "title": "Update the branch of pull request #{pullNumber} in {owner}/{repo}"
+    "title": "{method} in a GitHub project",
+    "fields": []
    }
   },
-  "create_pending_pull_request_review": {
-   "action": "github.pr.review",
-   "risk": "medium",
-   "scope": {
-    "owner": "{owner}",
-    "repo": "{owner}/{repo}"
-   }
+  "pull_request_read": {
+   "action": "github.read.pull_request_read",
+   "risk": "low"
   },
-  "create_and_submit_pull_request_review": {
+  "pull_request_review_write": {
    "action": "github.pr.review",
    "risk": "medium",
    "scope": {
@@ -292,7 +624,7 @@
     "repo": "{owner}/{repo}"
    },
    "summary": {
-    "title": "Review pull request #{pullNumber} in {owner}/{repo}",
+    "title": "{method} a review on pull request #{pullNumber} in {owner}/{repo}",
     "fields": [
      [
       "Verdict",
@@ -300,53 +632,6 @@
      ]
     ],
     "preview": "{body}"
-   }
-  },
-  "submit_pending_pull_request_review": {
-   "action": "github.pr.review",
-   "risk": "medium",
-   "scope": {
-    "owner": "{owner}",
-    "repo": "{owner}/{repo}"
-   }
-  },
-  "add_comment_to_pending_review": {
-   "action": "github.pr.review",
-   "risk": "medium",
-   "scope": {
-    "owner": "{owner}",
-    "repo": "{owner}/{repo}"
-   }
-  },
-  "request_copilot_review": {
-   "action": "github.pr.review",
-   "risk": "low",
-   "scope": {
-    "owner": "{owner}",
-    "repo": "{owner}/{repo}"
-   }
-  },
-  "create_or_update_file": {
-   "action": "github.file.write",
-   "risk": "high",
-   "scope": {
-    "owner": "{owner}",
-    "repo": "{owner}/{repo}",
-    "branch": "{owner}/{repo}/{branch}"
-   },
-   "summary": {
-    "title": "Write {path} in {owner}/{repo}",
-    "fields": [
-     [
-      "Branch",
-      "{branch}"
-     ],
-     [
-      "Commit message",
-      "{message}"
-     ]
-    ],
-    "preview": "{content}"
    }
   },
   "push_files": {
@@ -375,99 +660,177 @@
     ]
    }
   },
-  "delete_file": {
-   "action": "github.file.delete",
-   "risk": "high",
+  "repository_ruleset_read": {
+   "action": "github.read.repository_ruleset_read",
+   "risk": "low"
+  },
+  "request_copilot_review": {
+   "action": "github.pr.review",
+   "risk": "low",
    "scope": {
     "owner": "{owner}",
-    "repo": "{owner}/{repo}",
-    "branch": "{owner}/{repo}/{branch}"
+    "repo": "{owner}/{repo}"
    },
    "summary": {
-    "title": "Delete {path} in {owner}/{repo}",
-    "fields": [
-     [
-      "Branch",
-      "{branch}"
-     ],
-     [
-      "Commit message",
-      "{message}"
-     ]
-    ]
+    "title": "Ask Copilot to review #{pullNumber} in {owner}/{repo}",
+    "fields": []
    }
   },
-  "create_branch": {
-   "action": "github.branch.create",
-   "risk": "medium",
+  "search_code": {
+   "action": "github.read.search_code",
+   "risk": "low"
+  },
+  "search_commits": {
+   "action": "github.read.search_commits",
+   "risk": "low"
+  },
+  "search_issues": {
+   "action": "github.read.search_issues",
+   "risk": "low"
+  },
+  "search_orgs": {
+   "action": "github.read.search_orgs",
+   "risk": "low"
+  },
+  "search_pull_requests": {
+   "action": "github.read.search_pull_requests",
+   "risk": "low"
+  },
+  "search_repositories": {
+   "action": "github.read.search_repositories",
+   "risk": "low"
+  },
+  "search_users": {
+   "action": "github.read.search_users",
+   "risk": "low"
+  },
+  "star_repository": {
+   "action": "github.star",
+   "risk": "low",
    "scope": {
     "owner": "{owner}",
-    "repo": "{owner}/{repo}",
-    "branch": "{owner}/{repo}/{branch}"
+    "repo": "{owner}/{repo}"
    },
    "summary": {
-    "title": "Create branch {branch} in {owner}/{repo}",
-    "fields": [
-     [
-      "From",
-      "{from_branch}"
-     ]
-    ]
+    "title": "Star {owner}/{repo}",
+    "fields": []
    }
   },
-  "create_repository": {
-   "action": "github.repo.create",
-   "risk": "high",
-   "summary": {
-    "title": "Create repository {name}",
-    "fields": [
-     [
-      "Private",
-      "{private}"
-     ],
-     [
-      "Organization",
-      "{organization}"
-     ]
-    ],
-    "preview": "{description}"
-   }
-  },
-  "fork_repository": {
-   "action": "github.repo.fork",
+  "sub_issue_write": {
+   "action": "github.issue.write",
    "risk": "medium",
    "scope": {
     "owner": "{owner}",
     "repo": "{owner}/{repo}"
    },
    "summary": {
-    "title": "Fork {owner}/{repo}",
+    "title": "Change sub-issues of #{issue_number} in {owner}/{repo}",
     "fields": [
      [
-      "Into",
-      "{organization}"
+      "Method",
+      "{method}"
+     ],
+     [
+      "Sub-issue",
+      "{sub_issue_id}"
      ]
     ]
    }
   },
-  "dismiss_notification": {
-   "action": "github.notification.update",
+  "ui_get": {
+   "action": "github.read.ui_get",
    "risk": "low"
   },
-  "mark_all_notifications_read": {
-   "action": "github.notification.update",
-   "risk": "low"
+  "unstar_repository": {
+   "action": "github.star",
+   "risk": "low",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "Unstar {owner}/{repo}",
+    "fields": []
+   }
+  },
+  "update_gist": {
+   "action": "github.gist.write",
+   "risk": "medium",
+   "summary": {
+    "title": "Change gist {gist_id}",
+    "fields": [
+     [
+      "File",
+      "{filename}"
+     ]
+    ],
+    "preview": "{content}"
+   }
+  },
+  "update_issue_comment": {
+   "action": "github.issue.comment",
+   "risk": "medium",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "Edit comment {comment_id} in {owner}/{repo}",
+    "fields": [],
+    "preview": "{body}"
+   }
+  },
+  "update_pull_request": {
+   "action": "github.pr.update",
+   "risk": "medium",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "Change pull request #{pullNumber} in {owner}/{repo}",
+    "fields": [
+     [
+      "Title",
+      "{title}"
+     ],
+     [
+      "State",
+      "{state}"
+     ],
+     [
+      "Into",
+      "{base}"
+     ]
+    ],
+    "preview": "{body}"
+   }
+  },
+  "update_pull_request_branch": {
+   "action": "github.pr.update_branch",
+   "risk": "medium",
+   "scope": {
+    "owner": "{owner}",
+    "repo": "{owner}/{repo}"
+   },
+   "summary": {
+    "title": "Update the branch of pull request #{pullNumber} in {owner}/{repo}",
+    "fields": []
+   }
   }
  },
  "hide": [],
  "suggested_rules": [
   "github.read.*=allow",
   "github.notification.*=allow",
+  "github.star=allow",
   "github.issue.*=window:30m",
   "github.pr.review=each",
   "github.pr.merge=each",
   "github.file.*=each",
   "github.repo.*=each",
+  "github.actions.*=each",
+  "github.security.*=each",
   "github.unmapped.*=each",
   "github.*=each"
  ]

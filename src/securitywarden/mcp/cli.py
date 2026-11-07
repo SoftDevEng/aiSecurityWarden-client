@@ -60,6 +60,8 @@ def _die(msg: str, code: int = 1) -> "NoReturn":  # type: ignore[name-defined]
 
 def load_connector(ref: str) -> type[Connector]:
     """A connector by name ("gmail", or any installed connector package's name) or "package.module:ClassName"."""
+    if ref in BUILTIN:          # includes approval proxies ("mapping:github"), which aren't importable classes
+        return load_builtin(ref)
     known = available_connectors()
     target = known.get(ref, ref)
     mod_name, sep, cls_name = target.partition(":")
@@ -204,6 +206,27 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 def cmd_tools(args: argparse.Namespace) -> None:
     cfg = _config(args)
+    if getattr(args, "live", False):
+        # exactly what the agent is offered now: connectors from the settings and the website, approval proxies
+        # connected to their upstream (and asking to approve their tools, the first time or after a change)
+        hub = _hub(args, cfg)
+        try:
+            hub.refresh(force=True)
+            for t in hub.list_tools():
+                spec = hub.tools.get(t["name"], (None, None))[1]
+                act = f"{spec.action:<34} {spec.risk:<6}" if spec else f"{'':<41}"
+                print(f"  {t['name']:<40} {act} {t['description'].split('.')[0][:60]}")
+            for inst in hub.instances:
+                req = getattr(type(inst), "_pin_request", None)
+                if req:
+                    print(f"\n{inst.name}: waiting for you to approve its tools (request {req['request_id']}); "
+                          "approve it on the website or your phone, then run this again")
+                problem = getattr(type(inst), "_problem", None)
+                if problem:
+                    print(f"\n{inst.name}: upstream not available ({problem})")
+        finally:
+            hub.close()
+        return
     if not (args.connector or os.environ.get("SW_MCP_CONNECTORS") or cfg.get("connectors")):
         print("Installed connectors:")
         for name, target in sorted(available_connectors().items()):
@@ -378,6 +401,8 @@ def main(argv: list[str] | None = None) -> None:
     s.set_defaults(fn=cmd_serve)
     t = sub.add_parser("tools", help="list the tools, their actions and risks")
     common(t)
+    t.add_argument("--live", action="store_true",
+                   help="sign in and list exactly what the agent is offered now (incl. connectors from the website)")
     t.set_defaults(fn=cmd_tools)
     c = sub.add_parser("call", help="run one tool by hand, waiting for approval if needed (for testing)")
     c.add_argument("tool", help="tool name, e.g. gmail_search (see: sw-mcp tools)")

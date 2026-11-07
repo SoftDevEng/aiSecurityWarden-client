@@ -421,7 +421,10 @@ class Hub:
                     "status waiting_for_approval and should call check_approval later." if spec.risk != "high"
                     else " Always needs the user's approval through SecurityWarden: you get status "
                          "waiting_for_approval and should call check_approval later.")
-            out.append({"name": full, "description": spec.description + note,
+            desc = spec.description.rstrip()
+            if desc and desc[-1] not in ".!?":
+                desc += "."                 # upstream descriptions often have no full stop before our note
+            out.append({"name": full, "description": desc + note,
                         "inputSchema": getattr(spec, "input_schema", None) or spec.schema(),
                         "annotations": {"readOnlyHint": spec.action.split(".")[1] == "read",
                                         "destructiveHint": spec.risk == "high"}})

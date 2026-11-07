@@ -656,6 +656,50 @@ class ProxyConnector(Connector):
         return bool(cls._problem) or (up is not None and up.changed) or (
             cls._pin_request is not None and time.monotonic() - cls._pin_polled >= cls.PIN_POLL)
 
+    # A tool-approval request is bound to the process that made it (its nonce). sw-mcp processes come and go
+    # (the agent restarts it, "sw-mcp tools --live" runs once), so the waiting request is kept on disk, owner-only,
+    # and whichever process runs next finishes it. The nonce alone can't approve anything: the server only stores
+    # a list a person approved, for exactly that list.
+    @classmethod
+    def _pending_path(cls) -> str | None:
+        cred = getattr(cls._client, "cred", None)
+        cid = getattr(cred, "id", None)
+        if not isinstance(cid, str) or not re.match(r"^[A-Za-z0-9_-]{8,64}$", cid):
+            return None
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+        return os.path.join(base, "securitywarden", "proxy-pending", f"{cid}-{cls.name}.json")
+
+    @classmethod
+    def _load_pending(cls) -> dict[str, Any] | None:
+        path = cls._pending_path()
+        try:
+            with open(path, encoding="utf-8") as f:            # type: ignore[arg-type]
+                d = json.load(f)
+            if isinstance(d, dict) and isinstance(d.get("fps"), list) and isinstance(d.get("request_id"), str) \
+                    and isinstance(d.get("nonce"), str):
+                return d
+        except (OSError, ValueError, TypeError):
+            pass
+        return None
+
+    @classmethod
+    def _save_pending(cls, req: dict[str, Any] | None) -> None:
+        path = cls._pending_path()
+        if not path:
+            return
+        try:
+            if req is None:
+                if os.path.exists(path):
+                    os.unlink(path)
+                return
+            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(req, f)
+            os.replace(path + ".tmp", path)
+        except OSError:
+            pass
+
     @classmethod
     def _sync_pins(cls, live: list[dict[str, Any]]) -> None:
         """Tool-list fingerprints: tools are offered only once a person approved exactly what the agent will
@@ -680,14 +724,19 @@ class ProxyConnector(Connector):
             cls.approved = cls.approved or set()
             return
         if set(fps) <= cls.approved:
+            if cls._pin_request is not None or cls._load_pending() is not None:
+                cls._save_pending(None)
             cls._pin_request = None
             return
+        if cls._pin_request is None:
+            cls._pin_request = cls._load_pending()        # asked by an earlier sw-mcp process
         req = cls._pin_request
         try:
             if req is not None and req["fps"] == fps:
                 cls._pin_polled = time.monotonic()
                 if cls._client.store_proxy_pins(cls.name, req["request_id"], req["nonce"], fps) == "stored":
                     cls.approved, cls._pin_request = set(fps), None
+                    cls._save_pending(None)
                     cls._log(f"{cls.name}: tool changes approved")
                 return
             if fps == cls._pin_denied:
@@ -703,12 +752,18 @@ class ProxyConnector(Connector):
             r = cls._client.request_action(f"{cls.name}.tools.approve", {"fingerprints": fps}, summary.as_dict(),
                                            risk="high")
             cls._pin_request = {"request_id": r["request_id"], "nonce": r["nonce"], "fps": fps}
+            cls._save_pending(cls._pin_request)
             cls._pin_polled = time.monotonic()
             cls._log(f"{cls.name}: asked the user to approve {len(new)} new or changed tool(s) "
                      f"(request {r['request_id']})")
         except ApprovalError as e:
-            cls._pin_request, cls._pin_denied = None, fps
-            cls._log(f"{cls.name}: tool changes not approved ({e.reason}); they stay hidden until the list changes")
+            cls._pin_request = None
+            cls._save_pending(None)
+            if e.reason == "approval_denied":
+                cls._pin_denied = fps
+                cls._log(f"{cls.name}: tool changes denied; they stay hidden until the list changes")
+            else:                        # expired, cancelled, used: ask again next time
+                cls._log(f"{cls.name}: the tool approval request ended ({e.reason}); asking again")
         except SecurityWardenError as e:
             cls._log(f"{cls.name}: couldn't ask about tool changes ({str(e)[:200]})")
 
