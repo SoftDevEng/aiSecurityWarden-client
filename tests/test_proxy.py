@@ -357,3 +357,15 @@ def test_drafted_github_style_tools_get_a_repo_scope():
     assert m["tools"]["make-PR"] == {"action": "acme.make_pr", "risk": "medium",
                                      "scope": {"owner": "{owner}", "repo": "{owner}/{repo}"}}
     assert report == [("make-PR", "acme.make_pr", "medium", "no hint from the server: check it")]
+
+
+def test_drafts_make_risky_names_high_and_cut_long_names_at_a_word():
+    from securitywarden.mcp.proxy import action_word, draft_mapping
+    assert action_word("add_reply_to_pull_request_comment") == "add_reply_to_pull_request"
+    m, report = draft_mapping("gh", "GH", {"http": {"url": "https://x.example/mcp", "headers": {}}}, [], [
+        {"name": n} for n in ("merge_pull_request", "push_files", "create_repository", "sendEmail", "issue_write",
+                              "get_merged_stats")])
+    risks = {t: e["risk"] for t, e in m["tools"].items()}
+    assert risks == {"merge_pull_request": "high", "push_files": "high", "create_repository": "high",
+                     "sendEmail": "high", "issue_write": "medium", "get_merged_stats": "medium"}
+    assert dict((r[0], r[3]) for r in report)["sendEmail"] == "no hint from the server; its name says 'send'"

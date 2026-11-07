@@ -155,22 +155,43 @@ def mapped_tools(m: dict[str, Any]) -> list[dict[str, Any]]:
              "description": e.get("description", "")} for t, e in sorted((m.get("tools") or {}).items())]
 
 
+# words in a tool's name that usually mean it can't be undone or reaches other people: a draft makes these high
+# risk even when the server gives no hint (GitHub's server, for one, marks merges and pushes as nothing at all)
+HIGH_RISK_WORDS = ("delete", "remove", "destroy", "drop", "purge", "erase", "merge", "push", "deploy", "publish",
+                   "release", "send", "email", "pay", "payment", "refund", "transfer", "charge", "order", "trade",
+                   "buy", "sell", "transfer", "revoke", "archive_repo", "create_repository", "rotate", "reset",
+                   "execute", "exec", "run", "trigger", "shutdown", "terminate", "kill")
+
+
+def _high_word(tname: str) -> str | None:
+    words = re.split(r"[^a-z0-9]+", re.sub(r"([a-z])([A-Z])", r"\1_\2", tname).lower())
+    joined = "_".join(words)
+    for w in HIGH_RISK_WORDS:
+        if (w in words) or ("_" in w and w in joined):
+            return w
+    return None
+
+
 def draft_mapping(name: str, title: str, upstream: dict[str, Any], secrets: list[str],
                   tools: list[dict[str, Any]]) -> tuple[dict[str, Any], list[tuple[str, str, str, str]]]:
     """A starter mapping for an MCP server, from its live tool list (``sw-mcp proxy-init``). Every tool gets an
     action and a risk from the server's own hints, for a person to check before uploading: read-only ->
     <name>.read.<tool> (low), destructive -> <name>.<tool> (high), no hint -> <name>.<tool> (medium). Tools taking
-    owner/repo get a repo scope. Returns (mapping, [(tool, action, risk, why)])."""
+    owner/repo get a repo scope. A name with a word like delete, merge, push, send or pay makes a tool with no hint
+    high risk. Returns (mapping, [(tool, action, risk, why)])."""
     entries: dict[str, dict[str, Any]] = {}
     report = []
     for t in tools:
         tname = t["name"]
         hints = t.get("annotations") or {}
         word = action_word(tname)
+        high = _high_word(tname)
         if hints.get("destructiveHint") is True:
             action, risk, why = f"{name}.{word}", "high", "the server says it's destructive"
         elif hints.get("readOnlyHint") is True:
             action, risk, why = f"{name}.read.{word}", "low", "the server says it only reads"
+        elif high:
+            action, risk, why = f"{name}.{word}", "high", f"no hint from the server; its name says {high!r}"
         else:
             action, risk, why = f"{name}.{word}", "medium", "no hint from the server: check it"
         if not ACTION_RE.match(action):
@@ -206,7 +227,10 @@ def action_word(tool: str) -> str:
     w = re.sub(r"[^a-z0-9_]", "_", tool.lower()).strip("_") or "tool"
     if not w[0].isalpha():
         w = "t_" + w
-    return w[:32]
+    if len(w) > 32:                      # cut at a word boundary: add_reply_to_pull_request, not ..._commen
+        cut = w[:33].rfind("_")
+        w = w[:cut] if cut >= 8 else w[:32]
+    return w
 
 
 def tool_word(tool: str) -> str:
