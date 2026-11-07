@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from securitywarden import crypto
@@ -92,3 +94,16 @@ def test_ed25519_rejects_tampering_and_other_keys():
                                      (None, "00" * 64), ("00" * 32, None)])
 def test_ed25519_malformed_input_is_false_not_an_error(pub, sig):
     assert crypto.verify_ed25519(pub, b"x", sig) is False
+
+
+def test_passkey_wrap_rejects_short_prf_and_swaps():
+    acct = os.urandom(32)
+    prf = os.urandom(32)
+    blob = crypto.wrap_account_key_with_passkey(acct, prf, "u1", "c1")
+    assert crypto.unwrap_account_key_with_passkey(blob, prf, "u1", "c1") == acct
+    with pytest.raises(crypto.CryptoError):
+        crypto.wrap_account_key_with_passkey(acct, prf[:16], "u1", "c1")
+    for uid, cid, key in (("u2", "c1", prf), ("u1", "c2", prf), ("u1", "c1", os.urandom(32))):
+        with pytest.raises(crypto.CryptoError):
+            crypto.unwrap_account_key_with_passkey(blob, key, uid, cid)
+    assert len(crypto.passkey_prf_salt()) == 32
