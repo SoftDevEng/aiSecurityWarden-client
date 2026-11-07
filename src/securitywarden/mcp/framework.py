@@ -304,6 +304,7 @@ class Hub:
         self.refresh_every = refresh_every
         self._refreshed_at: float | None = None
         self.tools_changed = False                # the MCP server tells the agent (notifications/tools/list_changed)
+        self._requested: list[type[Connector]] = []   # the classes last asked for (set_connectors)
         self._stale: dict[str, str] = {}          # request id -> tool, for actions dropped by a connector update
         self.policy: dict[str, Any] | None = None  # the token's action rules, when the server sends them
         self.set_connectors(self.static, strict=True)
@@ -316,8 +317,12 @@ class Hub:
         instances: list[Connector] = []
         tools: dict[str, tuple[Connector, ToolSpec]] = {}
         names: set[str] = set()
+        self._requested = list(connectors)
         for cls in dict.fromkeys(connectors):
             try:
+                bind = getattr(cls, "bind", None)       # approval proxies talk to their upstream with this client
+                if bind is not None and self.client is not None:
+                    cls = bind(self.client, self.log)
                 if cls.name in names:
                     raise ValueError(f"two connectors are called {cls.name}")
                 specs = cls.tool_specs()
@@ -351,7 +356,9 @@ class Hub:
         return changed
 
     def refresh(self, *, force: bool = False) -> None:
-        """Pick up connectors turned on, off or updated in SecurityWarden (at most every refresh_every s)."""
+        """Pick up connectors turned on, off or updated in SecurityWarden (at most every refresh_every s), and
+        approval proxies whose upstream came up or changed its tools."""
+        self._refresh_proxies()
         if self.source is None or self.client is None:
             return
         now = self.clock()
@@ -371,6 +378,15 @@ class Hub:
             self.tools_changed = True
             self.log(f"connectors now: {', '.join(i.name for i in self.instances) or 'none'} ({len(self.tools)} tools)")
         if self.visible_tools() != before:
+            self.tools_changed = True
+
+    def _refresh_proxies(self) -> None:
+        stale = False
+        for inst in self.instances:
+            needs = getattr(type(inst), "needs_refresh", None)
+            if needs is not None and needs():
+                stale = True
+        if stale and self.set_connectors(self._requested):
             self.tools_changed = True
 
     def visible_tools(self) -> list[str]:
@@ -405,7 +421,8 @@ class Hub:
                     "status waiting_for_approval and should call check_approval later." if spec.risk != "high"
                     else " Always needs the user's approval through SecurityWarden: you get status "
                          "waiting_for_approval and should call check_approval later.")
-            out.append({"name": full, "description": spec.description + note, "inputSchema": spec.schema(),
+            out.append({"name": full, "description": spec.description + note,
+                        "inputSchema": getattr(spec, "input_schema", None) or spec.schema(),
                         "annotations": {"readOnlyHint": spec.action.split(".")[1] == "read",
                                         "destructiveHint": spec.risk == "high"}})
         out.append({
@@ -471,7 +488,11 @@ class Hub:
         if name not in self.tools:
             raise KeyError(name)
         inst, spec = self.tools[name]
-        problem = _check_args(spec, arguments)
+        if getattr(spec, "loose", False):          # an approval proxy: the upstream's own schema
+            from .proxy import check_args
+            problem = check_args(getattr(spec, "input_schema", {}), arguments)
+        else:
+            problem = _check_args(spec, arguments)
         if problem:
             return Result(problem, True)
         try:
@@ -501,7 +522,10 @@ class Hub:
                 return self._check(rid)
 
         try:
-            r = self.client.request_action(spec.action, plan.args, plan.summary.as_dict(), risk=spec.risk)
+            scope = getattr(plan, "scope", None)
+            r = (self.client.request_action(spec.action, plan.args, plan.summary.as_dict(), risk=spec.risk, scope=scope)
+                 if scope else
+                 self.client.request_action(spec.action, plan.args, plan.summary.as_dict(), risk=spec.risk))
         except ApprovalError as e:
             self.log(f"{name}: {spec.action} refused ({e.reason})")
             return Result(_OUTCOMES.get(e.reason, f"SecurityWarden refused the action ({e})."), True)

@@ -446,6 +446,55 @@ Sending digests the full recipients, subject and body; a reply also the thread a
 a forward the original message id (Gmail messages don't change). Addresses and subjects are checked
 (no line breaks: no header injection), at most 50 recipients and 100 messages per batch.
 
+## Approval proxy
+
+`sw-mcp` can put another MCP server's tools behind the action gate. A **mapping file** (`sw-proxy/1`, JSON,
+`.swproxy`) names the upstream (`stdio`: a program, `http`: a Streamable HTTP URL), the project secrets it needs,
+and per upstream tool its action, risk, summary template and scope. `securitywarden.mcp.proxy` turns a mapping into
+a connector class, so waiting, `check_approval`, deny with comment, digests and untrusted results work as for any
+connector. Built-in mappings ship in `securitywarden/mcp/mappings/` (GitHub); accounts upload their own on the
+Connectors page (stored and distributed like custom connectors, encrypted). User guide: `docs/mcp-proxy.md`.
+
+- **Secrets:** `${secret:NAME}` only in `upstream.stdio.env` or `upstream.http.headers`, never in the command,
+  arguments or URL. The upstream's environment is sw-mcp's without any `SW_*` variable, plus its own values.
+- **Unmapped tools** become `<name>.unmapped.<tool>` (`<name>.unmapped.read.<tool>` if the upstream calls them
+  read-only, high risk if it calls them destructive): upstream hints never fall under rules written for mapped
+  actions. Mapped actions may not use `<name>.unmapped`.
+- **Arguments:** checked against the upstream's `required` (and `additionalProperties: false`); floats are carried
+  as `{"$float": "<repr>"}` in the digested arguments and forwarded as numbers.
+- **Results:** text (and embedded resource text) returned as untrusted content, other parts named and dropped, cut
+  at 200,000 characters. Upstream errors are untrusted too. Requests from the upstream (sampling, roots) are refused.
+- **Transport:** stdio unless the mapping only has http, or `SW_PROXY_TRANSPORT=<name>=http`.
+- **Same-user warning:** on Linux, if sw-mcp runs as the same user as the process that started it (the agent), the
+  agent could read a stdio upstream's environment; sw-mcp logs it and sends `POST /v1/notices`
+  `{"code": "proxy_same_user", "subject": "<name>"}` (fixed codes only; the server logs it once a day).
+
+### Rules by argument (scope)
+
+A mapping's `scope` maps names (`repo`, `owner`, `branch`) to templates of the tool's arguments
+(`"{owner}/{repo}"`). An action request may carry `"scope": {"repo": [...]}` (only when `/v1/actions/config` says
+`"scopes": true`): for each value, `scope_mac(project_key, key, value)` and the same for each `/` prefix with `/*`
+(up to 8 levels):
+
+    scope_mac = base64url(HMAC-SHA-256(HKDF(project_key, "securitywarden/v1/action-scope"), "<key>=<value>"))
+
+A rule may have `"where": {"repo": [scope_mac, ...]}` and `"where_enc"`: the readable text
+(`repo=SoftDevEng/*, branch=...`) encrypted under `HKDF(project_key, "securitywarden/v1/rule-scope")` with AAD
+`sw1|where|<project_id>`. Written as `github.pr.merge[repo=SoftDevEng/*]=allow`; the website and swctl seal it
+before saving. A rule with `where` matches only if, for every name, one of its hashes is among the request's. The
+server never sees the values. An approved `window` rule with a scope opens a window only for that rule's scope
+(`window_key`).
+
+### Tool pins
+
+Each upstream tool's fingerprint is SHA-256 of canonical JSON `{"name", "description", "inputSchema",
+"annotations"}`. A tool is offered only if its fingerprint is approved for the token (`GET /v1/proxy-pins/<name>`
+→ `{"fingerprints": [...] | null}`). Otherwise sw-mcp raises a high-risk action `<name>.tools.approve` with args
+`{"fingerprints": <the full sorted list>}`, and stores the list with `POST /v1/proxy-pins/<name>`
+`{"request_id", "nonce", "fingerprints"}`: the server accepts it only by using up an approved request of that action
+whose digest is exactly that list's (202 while pending, 403 when denied). So neither the machine nor the server can
+approve tool changes alone. A denied list isn't asked about again until the upstream's tools change once more.
+
 ## Connector distribution
 
 Connectors are chosen **per token** on the website instead of being installed on each machine: a project makes

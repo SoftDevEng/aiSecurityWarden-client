@@ -17,6 +17,7 @@ from typing import Any, Callable
 from ..client.api import SecurityWardenError
 from .bundle import BundleError, load_bundle, unload_bundle
 from .framework import Connector
+from .proxy import FORMAT as PROXY_FORMAT, proxy_class
 
 LogFn = Callable[[str], None]
 
@@ -133,7 +134,10 @@ class RemoteConnectors:
                 bundle = client.connector_bundle(entry)
                 if bundle.get("name") != meta.get("name"):
                     raise BundleError("the code and its description name different connectors")
-                cls = load_bundle(bundle, f"{cid}@{version}")
+                if bundle.get("format") == PROXY_FORMAT:     # an approval proxy's mapping file: no code to import
+                    cls = proxy_class(bundle)
+                else:
+                    cls = load_bundle(bundle, f"{cid}@{version}")
                 self._remember(cid, version)
             except Exception as e:  # noqa: BLE001 - one bad connector must not stop the others
                 self._tell(log, cid, version, "failed", f"connector {cid} version {version} not loaded: "
@@ -145,7 +149,8 @@ class RemoteConnectors:
             keep[cid] = _Loaded(version, cls, bundle)
         for cid, old in self.loaded.items():
             if cid not in keep:
-                unload_bundle(old.bundle)
+                if old.bundle.get("format") != PROXY_FORMAT:
+                    unload_bundle(old.bundle)
                 log(f"connector {old.cls.name} was turned off for this project")
         self.loaded = keep
         self.started = True

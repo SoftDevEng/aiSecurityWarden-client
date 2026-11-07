@@ -165,3 +165,33 @@ def test_check_action_returns_the_denial_comment():
         with pytest.raises(ApprovalError) as e:
             c.check_action(rid, "n", "d")
         assert (e.value.reason, e.value.comment) == (reason, comment), k
+
+
+def test_scope_vectors_and_rules_by_argument():
+    with open(os.path.join(HERE, "vectors", "crypto-v1.json"), encoding="utf-8") as f:
+        s = json.load(f)["scopes"]
+    pkey = bytes.fromhex(s["project_key_hex"])
+    for c in s["macs"]:
+        assert crypto.scope_macs(pkey, c["key"], c["value"]) == c["macs"]
+    assert crypto.open_rule_scope(pkey, s["project_id"], s["rule"]["where_enc"]) == s["rule"]["text"]
+    pol = normalize_action_policy(s["policy"])
+    for d in s["decisions"]:
+        assert action_decision(pol, "github.pr.merge", "medium", d["scope"])[0] == d["mode"]
+    assert [d["mode"] for d in s["decisions"]] == ["allow", "each", "each", "each"]
+    assert action_decision(pol, "github.pr.merge", "high", s["decisions"][0]["scope"])[0] == "each"   # risk tightens
+
+
+@pytest.mark.parametrize("text", ["x[repo=]=allow", "x[repo=a*b]=allow", "x[Repo=a]=allow", "x[a=1,a=2]=allow",
+                                  "x[a=1,b=1,c=1,d=1,e=1]=allow"])
+def test_bad_rule_scopes(text):
+    with pytest.raises(ValueError):
+        parse_action_rule(text)
+
+
+def test_where_needs_hashes_and_sealed_text():
+    good = {"repo": ["A" * 43]}
+    with pytest.raises(ValueError, match="hashed"):
+        normalize_action_policy({"rules": [{"match": "x.y", "mode": "allow", "where": {"repo": ["SoftDevEng/x"]},
+                                            "where_enc": "v1." + "A" * 40}]})
+    with pytest.raises(ValueError, match="encrypted"):
+        normalize_action_policy({"rules": [{"match": "x.y", "mode": "allow", "where": good}]})

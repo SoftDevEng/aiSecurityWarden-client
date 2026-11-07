@@ -341,7 +341,36 @@ class SecurityWardenClient:
             raise SecurityWardenError("the connector changed meanwhile; try again")
         return crypto.decrypt_connector_bundle(self._connector_key(entry), entry["id"], entry["version"], r["blob"])
 
-    def request_action(self, action: str, args: Any, summary: dict[str, Any], *, risk: str = "high") -> dict[str, Any]:
+    def proxy_pins(self, name: str) -> list[str] | None:
+        """The tool fingerprints approved for this token's approval proxy ``name`` (None: none approved yet).
+        Raises SecurityWardenError("unsupported") on servers without tool pinning."""
+        if not self.action_config().get("pins"):
+            raise SecurityWardenError("unsupported")
+        return self._req("GET", f"/v1/proxy-pins/{name}").json().get("fingerprints")
+
+    def store_proxy_pins(self, name: str, request_id: str, nonce: str, fingerprints: list[str]) -> str:
+        """Replace the approved fingerprints, using an approved ``<name>.tools.approve`` request for exactly this
+        list (the server checks its digest and uses it up). "stored" or "pending"; raises ApprovalError."""
+        r = self._req("POST", f"/v1/proxy-pins/{name}", accept_403=True,
+                      json={"request_id": request_id, "nonce": nonce, "fingerprints": fingerprints})
+        if r.status_code == 202:
+            return "pending"
+        if r.status_code == 403:
+            reason = _detail(r)
+            raise ApprovalError(reason if reason.startswith(("approval_", "action_")) else "approval_denied",
+                                self._denial_comment(r, request_id))
+        return "stored"
+
+    def notice(self, code: str, subject: str) -> None:
+        """Put a warning about this machine in the activity log (fixed codes only, e.g. "proxy_same_user").
+        Older servers don't have it: nothing happens."""
+        r = self._req("POST", "/v1/notices", json={"code": code, "subject": subject}, accept_403=True) \
+            if self.action_config().get("notices") else None
+        if r is not None and r.status_code >= 400:
+            raise SecurityWardenError(f"notice refused ({r.status_code})")
+
+    def request_action(self, action: str, args: Any, summary: dict[str, Any], *, risk: str = "high",
+                       scope: dict[str, str] | None = None) -> dict[str, Any]:
         """Ask whether this token may perform ``action`` with exactly ``args`` now.
 
         Returns ``{"status": "approved" | "pending", "request_id", "nonce", "digest", "match",
@@ -365,6 +394,9 @@ class SecurityWardenClient:
                                                                              rid, summary)}
         if cfg.get("summaries") != "encrypted":
             body["summary"] = summary
+        if scope and cfg.get("scopes"):
+            # rules by argument: keyed hashes only, so the server can match rules without learning the values
+            body["scope"] = {k: crypto.scope_macs(cfg["project_key"], k, v) for k, v in sorted(scope.items())[:4]}
         r = self._req("POST", "/v1/actions", json=body, accept_403=True)
         if r.status_code == 403:
             raise ApprovalError(_detail(r) if _detail(r).startswith("action_") else "action_denied")

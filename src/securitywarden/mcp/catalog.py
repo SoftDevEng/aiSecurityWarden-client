@@ -4,14 +4,21 @@ for a project on the website; they don't count against the account's custom conn
 from __future__ import annotations
 
 import importlib
+import json
 from typing import Any
 
-BUILTIN = {"gmail": "securitywarden.mcp.gmail:Gmail"}
+# "module:Class" for a connector; "mapping:<file>" for an approval proxy (mcp/mappings/<file>.swproxy)
+BUILTIN = {"gmail": "securitywarden.mcp.gmail:Gmail", "github": "mapping:github"}
 
 
 def load_builtin(name: str) -> Any:
-    mod_name, _, cls_name = BUILTIN[name].partition(":")
-    return getattr(importlib.import_module(mod_name), cls_name)
+    kind, _, rest = BUILTIN[name].partition(":")
+    if kind == "mapping":
+        from importlib import resources
+        from .proxy import proxy_class
+        text = resources.files("securitywarden.mcp").joinpath("mappings", f"{rest}.swproxy").read_text("utf-8")
+        return proxy_class(json.loads(text))
+    return getattr(importlib.import_module(kind), rest)
 
 
 def builtin_catalog() -> list[dict[str, Any]]:

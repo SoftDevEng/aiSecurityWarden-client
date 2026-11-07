@@ -128,6 +128,10 @@ ACTION_MATCH_RE = re.compile(r"^(\*|[a-z][a-z0-9_]{0,31}(\.[a-z][a-z0-9_]{0,31})
 ACTION_MODES = ("allow", "each", "window", "deny")
 RISKS = ("low", "medium", "high")
 MAX_RULES = 50
+SCOPE_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+SCOPE_MAC_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")          # crypto.scope_mac: base64url of HMAC-SHA-256
+WHERE_ENC_RE = re.compile(r"^v1\.[A-Za-z0-9_-]{20,4000}$")
+MAX_SCOPE_KEYS, MAX_SCOPE_VALUES = 4, 8
 
 ACTION_DEFAULTS: dict[str, Any] = {
     "channels": ["admin_ui"],
@@ -185,8 +189,11 @@ def normalize_action_policy(value: Mapping[str, Any] | None) -> dict[str, Any] |
     for r in rules:
         if not isinstance(r, Mapping):
             raise ValueError("each rule must be an object")
-        if set(r) - {"match", "mode", "window"}:
-            raise ValueError(f"unknown rule field(s): {', '.join(sorted(set(r) - {'match', 'mode', 'window'}))}")
+        if "where_text" in r:
+            raise ValueError("a rule with a [scope] must be sealed with the project key first; set it on the website")
+        if set(r) - {"match", "mode", "window", "where", "where_enc"}:
+            raise ValueError(f"unknown rule field(s): "
+                             f"{', '.join(sorted(set(r) - {'match', 'mode', 'window', 'where', 'where_enc'}))}")
         match, mode = r.get("match"), r.get("mode")
         if not isinstance(match, str) or not ACTION_MATCH_RE.match(match):
             raise ValueError(f"invalid action pattern {match!r} (e.g. gmail.send, gmail.read.*, *)")
@@ -201,8 +208,52 @@ def normalize_action_policy(value: Mapping[str, Any] | None) -> dict[str, Any] |
             rule["window"] = w
         elif "window" in r:
             raise ValueError("window only applies to mode 'window'")
+        if "where" in r or "where_enc" in r:
+            rule["where"], rule["where_enc"] = normalize_where(r.get("where"), r.get("where_enc"))
         clean.append(rule)
     out["rules"] = clean
+    return out
+
+
+def normalize_where(where: Any, where_enc: Any) -> tuple[dict[str, list[str]], str]:
+    """A rule's scope condition: {"repo": [keyed hashes]} plus the readable text, encrypted under the project
+    key (``where_enc``) so the website can show it again. The server only ever sees the hashes."""
+    if not isinstance(where, Mapping) or not 1 <= len(where) <= MAX_SCOPE_KEYS:
+        raise ValueError(f"where: 1 to {MAX_SCOPE_KEYS} scope names")
+    out: dict[str, list[str]] = {}
+    for k, v in where.items():
+        if not isinstance(k, str) or not SCOPE_KEY_RE.match(k):
+            raise ValueError(f"where: invalid scope name {k!r}")
+        if not isinstance(v, (list, tuple)) or not 1 <= len(v) <= MAX_SCOPE_VALUES or \
+                not all(isinstance(x, str) and SCOPE_MAC_RE.match(x) for x in v):
+            raise ValueError(f"where.{k}: 1 to {MAX_SCOPE_VALUES} hashed values")
+        out[k] = sorted(set(v))
+    if not isinstance(where_enc, str) or not WHERE_ENC_RE.match(where_enc):
+        raise ValueError("where_enc: the rule's scope text, encrypted")
+    return out, where_enc
+
+
+def scope_matches(where: Mapping[str, list[str]] | None, scope: Mapping[str, Any] | None) -> bool:
+    """Every scope name in the rule has a value the request also has (the request sends each value's hash and
+    those of its "/" prefixes, so "SoftDevEng/*" in a rule matches "SoftDevEng/sandbox")."""
+    if not where:
+        return True
+    scope = scope or {}
+    return all(set(vals) & set(scope.get(k) or []) for k, vals in where.items())
+
+
+def normalize_scope(value: Any) -> dict[str, list[str]]:
+    """An action request's scope: {"repo": [keyed hashes]} (see crypto.scope_macs)."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping) or len(value) > MAX_SCOPE_KEYS:
+        raise ValueError(f"scope: at most {MAX_SCOPE_KEYS} names")
+    out = {}
+    for k, v in value.items():
+        if not isinstance(k, str) or not SCOPE_KEY_RE.match(k) or not isinstance(v, (list, tuple)) or \
+                not 1 <= len(v) <= MAX_SCOPE_VALUES or not all(isinstance(x, str) and SCOPE_MAC_RE.match(x) for x in v):
+            raise ValueError("scope: names map to lists of hashed values")
+        out[k] = list(v)
     return out
 
 
@@ -220,18 +271,35 @@ def rule_matches(pattern: str, action: str) -> bool:
     return action == pattern
 
 
-def action_decision(policy: Mapping[str, Any] | None, action: str, risk: str) -> tuple[str, int | None]:
+def matching_rule(policy: Mapping[str, Any] | None, action: str,
+                  scope: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+    """The first rule that applies to this action (and its scope), or None."""
+    for r in effective_action_policy(policy)["rules"]:
+        if rule_matches(r["match"], action) and scope_matches(r.get("where"), scope):
+            return r
+    return None
+
+
+def window_key(action: str, rule: Mapping[str, Any] | None) -> str:
+    """What an approved 'window' rule opens: the action, and for a rule with a scope, only that rule's scope
+    (approving a merge in one repo must not open merges in another)."""
+    if rule and rule.get("where_enc"):
+        import hashlib
+        return f"{action}#{hashlib.sha256(rule['where_enc'].encode()).hexdigest()[:16]}"
+    return action
+
+
+def action_decision(policy: Mapping[str, Any] | None, action: str, risk: str,
+                    scope: Mapping[str, Any] | None = None) -> tuple[str, int | None]:
     """(mode, window seconds) for an action. A high-risk action is never allowed without asking and
-    never covered by a time window: such rules are tightened to "each". Risk only ever tightens."""
+    never covered by a time window: such rules are tightened to "each". Risk only ever tightens. A rule with a
+    ``where`` condition only matches requests whose ``scope`` satisfies it."""
     if not ACTION_RE.match(action or ""):
         raise ValueError("invalid action name (e.g. gmail.send: lowercase words joined by dots)")
     if risk not in RISKS:
         raise ValueError(f"risk must be one of: {', '.join(RISKS)}")
-    mode, window = "each", None
-    for r in effective_action_policy(policy)["rules"]:
-        if rule_matches(r["match"], action):
-            mode, window = r["mode"], r.get("window")
-            break
+    r = matching_rule(policy, action, scope)
+    mode, window = (r["mode"], r.get("window")) if r else ("each", None)
     if risk == "high" and mode in ("allow", "window"):
         return "each", None
     return mode, window
@@ -242,18 +310,48 @@ def describe_actions(policy: Mapping[str, Any] | None) -> str:
     p = effective_action_policy(policy)
     parts = []
     for r in p["rules"]:
-        parts.append(f"{r['match']}={r['mode']}" + (f":{_fmt(r['window'])}" if r["mode"] == "window" else ""))
+        parts.append(f"{r['match']}" + ("[…]" if r.get("where") else "") + f"={r['mode']}"
+                     + (f":{_fmt(r['window'])}" if r["mode"] == "window" else ""))
     rules = ", ".join(parts) if parts else "ask for every action"
     return f"{rules} via {', '.join(p['channels'])}" + ("" if policy else " (default)")
 
 
+RULE_SCOPE_RE = re.compile(r"^\s*([^\[\]=\s]+)\s*\[([^\[\]]*)\]\s*=(.*)$")
+
+
+def parse_where_text(text: str) -> dict[str, str]:
+    """``repo=SoftDevEng/sandbox, branch=SoftDevEng/sandbox/test/*`` -> {"repo": ..., "branch": ...}."""
+    out: dict[str, str] = {}
+    for part in [p for p in text.split(",") if p.strip()]:
+        k, sep, v = part.partition("=")
+        k, v = k.strip(), v.strip()
+        if not sep or not SCOPE_KEY_RE.match(k) or not v or len(v) > 300 or k in out:
+            raise ValueError(f"invalid scope {part.strip()!r} (use name=value, e.g. repo=SoftDevEng/sandbox)")
+        if "*" in v and not (v.endswith("/*") and "*" not in v[:-2]):
+            raise ValueError(f"{k}: a * only works as a whole last part, e.g. SoftDevEng/*")
+        out[k] = v
+    if not 1 <= len(out) <= MAX_SCOPE_KEYS:
+        raise ValueError(f"a rule's scope has 1 to {MAX_SCOPE_KEYS} names")
+    return out
+
+
 def parse_action_rule(text: str) -> dict[str, Any]:
-    """``gmail.send=each``, ``gmail.read.*=allow``, ``gmail.label=window:30m``, ``*=deny`` -> a rule."""
+    """``gmail.send=each``, ``gmail.read.*=allow``, ``gmail.label=window:30m``, ``*=deny`` -> a rule.
+    With a scope, ``github.pr.merge[repo=SoftDevEng/sandbox]=allow``, the rule gets ``where_text``: it must be
+    sealed with the project key (crypto.seal_rule_scope) before the server sees it."""
+    where_text = None
+    m = RULE_SCOPE_RE.match(text or "")
+    if m:
+        text = f"{m.group(1)}={m.group(3)}"
+        where_text = m.group(2).strip()
+        parse_where_text(where_text)
     match, sep, mode = (text or "").partition("=")
     if not sep:
         raise ValueError(f"invalid rule {text!r} (use ACTION=allow|each|deny or ACTION=window:30m)")
     mode, _, dur = mode.strip().partition(":")
     rule: dict[str, Any] = {"match": match.strip(), "mode": mode}
+    if where_text is not None:
+        rule["where_text"] = where_text
     if mode == "window":
         rule["window"] = parse_duration(dur or "")
     return rule

@@ -29,7 +29,10 @@ from .framework import Connector, Hub
 class FakeSecurityWarden:
     """Rules: action name (or ``prefix.*`` / ``*``) -> "allow" | "ask" | "deny". Unlisted actions ask."""
 
-    def __init__(self, rules: Mapping[str, str] | None = None, *, secrets: Mapping[str, str] | None = None):
+    def __init__(self, rules: Mapping[str, str] | None = None, *, secrets: Mapping[str, str] | None = None,
+                 pins: bool = False):
+        self.pins_on = pins                     # approval proxies: pin their tools (as current servers do)
+        self.pins: dict[str, list[str]] = {}
         self.rules = dict(rules or {})
         self.secrets = dict(secrets or {})
         self.requests: dict[str, dict[str, Any]] = {}
@@ -111,8 +114,10 @@ class FakeSecurityWarden:
         self.fetches += 1
         return dict(self.secrets)
 
-    def request_action(self, action: str, args: Any, summary: dict[str, Any], *, risk: str = "high") -> dict[str, Any]:
+    def request_action(self, action: str, args: Any, summary: dict[str, Any], *, risk: str = "high",
+                       scope: dict[str, str] | None = None) -> dict[str, Any]:
         self._alive()
+        self.last_scope = scope
         rule = self._rule(action)
         if rule == "deny":
             raise ApprovalError("action_denied")
@@ -124,6 +129,21 @@ class FakeSecurityWarden:
                               "state": "used" if allowed else "pending"}
         return {"status": "approved" if allowed else "pending", "request_id": rid, "nonce": f"n{self._n}",
                 "digest": self.requests[rid]["digest"], "match": "42", "expires_in": 3600, "check_after": 5}
+
+    def proxy_pins(self, name: str) -> list[str] | None:
+        from ..client.api import SecurityWardenError
+        if not self.pins_on:
+            raise SecurityWardenError("unsupported")
+        return self.pins.get(name)
+
+    def store_proxy_pins(self, name: str, request_id: str, nonce: str, fingerprints: list[str]) -> str:
+        r = self.requests[request_id]
+        if r["action"] != f"{name}.tools.approve" or r["digest"] != action_digest(r["action"], {"fingerprints": fingerprints}):
+            raise ApprovalError("action_mismatch")
+        if self.check_action(request_id, nonce, r["digest"]) == "pending":
+            return "pending"
+        self.pins[name] = list(fingerprints)
+        return "stored"
 
     def check_action(self, request_id: str, nonce: str, digest: str) -> str:
         self._alive()
