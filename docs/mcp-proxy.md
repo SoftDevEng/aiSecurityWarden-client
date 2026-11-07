@@ -90,6 +90,23 @@ weaker than a separate user, but much better than an environment variable.
 
 ## Writing a mapping file
 
+Let `sw-mcp` start it for you. It connects to the server, reads its tool list and writes a mapping with every
+tool already given an action and a risk from the server's own hints:
+
+```bash
+# a local MCP server (a program), its token given to it as an environment variable
+sw-mcp proxy-init acme --command acme-mcp --arg stdio --env ACME_API_KEY=ACME_TOKEN
+# a remote one, its token sent as "Authorization: Bearer ..."
+sw-mcp proxy-init acme --url https://mcp.acme.example/mcp --bearer ACME_TOKEN
+```
+
+`ACME_TOKEN` is the secret's **name** in aiSecurityWarden. To read the tool list now, `sw-mcp` takes its value
+from an environment variable of that name or asks you for it; the value is never written to the file. Then check
+every tool's risk (`high` always asks, whatever the rules say), add summaries and scopes where useful, upload
+`acme.swproxy` on the Connectors page and add the secret to the project.
+
+By hand, a mapping looks like this:
+
 ```json
 {"format": "sw-proxy/1", "name": "acme", "title": "Acme", "secrets": ["ACME_TOKEN"],
  "upstream": {"http": {"url": "https://mcp.acme.example/mcp",

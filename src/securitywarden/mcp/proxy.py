@@ -155,6 +155,38 @@ def mapped_tools(m: dict[str, Any]) -> list[dict[str, Any]]:
              "description": e.get("description", "")} for t, e in sorted((m.get("tools") or {}).items())]
 
 
+def draft_mapping(name: str, title: str, upstream: dict[str, Any], secrets: list[str],
+                  tools: list[dict[str, Any]]) -> tuple[dict[str, Any], list[tuple[str, str, str, str]]]:
+    """A starter mapping for an MCP server, from its live tool list (``sw-mcp proxy-init``). Every tool gets an
+    action and a risk from the server's own hints, for a person to check before uploading: read-only ->
+    <name>.read.<tool> (low), destructive -> <name>.<tool> (high), no hint -> <name>.<tool> (medium). Tools taking
+    owner/repo get a repo scope. Returns (mapping, [(tool, action, risk, why)])."""
+    entries: dict[str, dict[str, Any]] = {}
+    report = []
+    for t in tools:
+        tname = t["name"]
+        hints = t.get("annotations") or {}
+        word = action_word(tname)
+        if hints.get("destructiveHint") is True:
+            action, risk, why = f"{name}.{word}", "high", "the server says it's destructive"
+        elif hints.get("readOnlyHint") is True:
+            action, risk, why = f"{name}.read.{word}", "low", "the server says it only reads"
+        else:
+            action, risk, why = f"{name}.{word}", "medium", "no hint from the server: check it"
+        if not ACTION_RE.match(action):
+            action = f"{name}.{'read.' if risk == 'low' else ''}t_{word}"[:96]
+        e: dict[str, Any] = {"action": action, "risk": risk}
+        props = (t.get("inputSchema") or {}).get("properties") or {}
+        if isinstance(props, dict) and "owner" in props and "repo" in props:
+            e["scope"] = {"owner": "{owner}", "repo": "{owner}/{repo}"}
+        entries[tname] = e
+        report.append((tname, action, risk, why))
+    m = {"format": FORMAT, "name": name, "title": title, "secrets": secrets, "upstream": upstream,
+         "tools": dict(sorted(entries.items())), "hide": [],
+         "suggested_rules": [f"{name}.read.*=allow", f"{name}.unmapped.*=each", f"{name}.*=each"]}
+    return validate_mapping(m), sorted(report)
+
+
 def load_mapping_file(path: str) -> dict[str, Any]:
     with open(path, encoding="utf-8") as f:
         return validate_mapping(json.load(f))
