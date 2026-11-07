@@ -332,6 +332,10 @@ def _policy_from_args(args: argparse.Namespace) -> dict | None:
 def cmd_token(args: argparse.Namespace) -> int:
     c = _admin_client(args)
     if args.action == "create":
+        if args.approval is None:
+            # new tokens need a person's OK to read secrets unless that is turned off on purpose
+            args.approval = "session"
+            print("Approval: once per session (the default; --approval none turns it off).", file=sys.stderr)
         tok = c.create_token(args.project, args.name, args.expires_days, args.allow_ip, _policy_from_args(args))
         if args.setup_code:
             code = c.create_setup_code(tok.id, tok)
@@ -347,8 +351,14 @@ def cmd_token(args: argparse.Namespace) -> int:
                   "it in a file only its user can read and point SW_ACCESS_TOKEN_FILE at it.", file=sys.stderr)
         if args.allow_ip:
             print(f"It only works from: {', '.join(args.allow_ip)}", file=sys.stderr)
+        else:
+            print("Warning: it works from any address. Limit it to the machine that uses it with --allow-ip.",
+                  file=sys.stderr)
         if args.approval not in (None, "none"):
             print("A person must approve its use (see: swctl admin approvals list).", file=sys.stderr)
+        else:
+            print("Warning: no approval. Anyone with this token can read the project's secrets without asking.",
+                  file=sys.stderr)
     elif args.action == "list":
         rows = c.list_tokens(args.project)
         names = {p["id"]: p["name"] for p in c.list_projects()}
@@ -458,7 +468,8 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
 def _approval_args(x: argparse.ArgumentParser) -> None:
     x.add_argument("--approval", choices=["none", "session", "every_fetch"],
-                   help="require a person to approve: once per session, or every fetch (default: none)")
+                   help="require a person to approve: once per session, or every fetch (new tokens: session; "
+                        "none turns it off)")
     x.add_argument("--session-ttl", metavar="DURATION", help="how long an approved session lasts, e.g. 8h (default 8h)")
     x.add_argument("--channel", action="append", choices=CHANNELS,
                    help="where approval requests go (repeatable; default admin_ui)")
