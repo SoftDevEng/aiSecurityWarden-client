@@ -287,6 +287,27 @@ def build() -> dict[str, Any]:
         ],
         "bad_comments": ["", "   ", "x" * (crypto.APPROVAL_COMMENT_MAX + 1), "bell\u0007", "nul\u0000"],
     }
+    # rules by argument: keyed hashes of scope values (and their "/" prefixes), rule scopes sealed for display
+    skey = key("scope/project")
+    with seeded("scope"):
+        where, where_enc = crypto.seal_rule_scope(skey, pid, "repo=SoftDevEng/*, branch=SoftDevEng/sandbox/test/*")
+    spol = approval.normalize_action_policy({"rules": [
+        {"match": "github.pr.merge", "mode": "allow", "where": where, "where_enc": where_enc},
+        {"match": "github.*", "mode": "each"}]})
+    sdecisions = []
+    for repo, branch in (("SoftDevEng/sandbox", "SoftDevEng/sandbox/test/x"), ("SoftDevEng/sandbox", "SoftDevEng/sandbox/main"),
+                         ("Other/repo", "Other/repo/test/x"), (None, None)):
+        sc = {} if repo is None else {"repo": crypto.scope_macs(skey, "repo", repo),
+                                      "branch": crypto.scope_macs(skey, "branch", branch)}
+        sdecisions.append({"repo": repo, "branch": branch, "scope": sc,
+                           "mode": approval.action_decision(spol, "github.pr.merge", "medium", sc)[0]})
+    v["scopes"] = {
+        "project_key_hex": skey.hex(), "project_id": pid,
+        "macs": [{"key": k_, "value": val, "macs": crypto.scope_macs(skey, k_, val)}
+                 for k_, val in (("repo", "SoftDevEng/sandbox"), ("branch", "a/b/c/d"), ("repo", "caf\u00e9"))],
+        "rule": {"text": "repo=SoftDevEng/*, branch=SoftDevEng/sandbox/test/*", "where": where, "where_enc": where_enc},
+        "policy": spol, "decisions": sdecisions,
+    }
     pol = {"channels": ["admin_ui", "push:telegram"], "timeout": 7200,
            "rules": [{"match": "gmail.read.*", "mode": "allow"}, {"match": "gmail.label", "mode": "window", "window": 1800},
                      {"match": "gmail.delete", "mode": "deny"}, {"match": "webull.*", "mode": "each"}]}

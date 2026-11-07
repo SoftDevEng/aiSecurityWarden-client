@@ -1097,6 +1097,134 @@
    }
   ]
  },
+ "scopes": {
+  "project_key_hex": "340b03c8834f2d47dd75bc342e128c74c390224c0f5f1c485f89cd0220b7f4d6",
+  "project_id": "LWSJwzJ2Bw9RH1xjXczR1Q",
+  "macs": [
+   {
+    "key": "repo",
+    "value": "SoftDevEng/sandbox",
+    "macs": [
+     "DoKG-hJiHJoJAOWwYlz3dSwZzGW7IcA97BxpkMrGDjM",
+     "JCbLoeivNGgaOciLsiZftwgudkZjLuo1PSRMYSXzmgY"
+    ]
+   },
+   {
+    "key": "branch",
+    "value": "a/b/c/d",
+    "macs": [
+     "O8lhUXYmKEouP1nGsuhVdiZPNZb0Y2kiK_Bh6DfRm48",
+     "k2FZmiDKgS8F6BmqLixNLIjpWKp3uauExdVD_QdyzpU",
+     "xh87phAovMAvg_Zc13tjdHdHRkAEp56HUzlDoqLaflE",
+     "ezG7Q5bFoYQC9wYLUm6UucIGzYvFMP7dioeAUbfvmwA"
+    ]
+   },
+   {
+    "key": "repo",
+    "value": "café",
+    "macs": [
+     "iOwkOimxLkxOrnEkpknrHReGsLFG8CrjNuzT1EdyrjQ"
+    ]
+   }
+  ],
+  "rule": {
+   "text": "repo=SoftDevEng/*, branch=SoftDevEng/sandbox/test/*",
+   "where": {
+    "repo": [
+     "JCbLoeivNGgaOciLsiZftwgudkZjLuo1PSRMYSXzmgY"
+    ],
+    "branch": [
+     "q_T_bviui0omJXsCNRq4WAujltNl9nWXkDJf-sRWdSE"
+    ]
+   },
+   "where_enc": "v1.AW98iOyoKrXtn98ZNKiyvFog-jOR7OCHn-mqNB0vfFxlu_PSfXok-nxqzxWaBM2e1qPNGUa2D0iWcy0RRWIrVoLi2zY0yI-oQBM__yqlzw"
+  },
+  "policy": {
+   "channels": [
+    "admin_ui"
+   ],
+   "timeout": 3600,
+   "max_pending": 5,
+   "max_per_hour": 60,
+   "rules": [
+    {
+     "match": "github.pr.merge",
+     "mode": "allow",
+     "where": {
+      "repo": [
+       "JCbLoeivNGgaOciLsiZftwgudkZjLuo1PSRMYSXzmgY"
+      ],
+      "branch": [
+       "q_T_bviui0omJXsCNRq4WAujltNl9nWXkDJf-sRWdSE"
+      ]
+     },
+     "where_enc": "v1.AW98iOyoKrXtn98ZNKiyvFog-jOR7OCHn-mqNB0vfFxlu_PSfXok-nxqzxWaBM2e1qPNGUa2D0iWcy0RRWIrVoLi2zY0yI-oQBM__yqlzw"
+    },
+    {
+     "match": "github.*",
+     "mode": "each"
+    }
+   ]
+  },
+  "decisions": [
+   {
+    "repo": "SoftDevEng/sandbox",
+    "branch": "SoftDevEng/sandbox/test/x",
+    "scope": {
+     "repo": [
+      "DoKG-hJiHJoJAOWwYlz3dSwZzGW7IcA97BxpkMrGDjM",
+      "JCbLoeivNGgaOciLsiZftwgudkZjLuo1PSRMYSXzmgY"
+     ],
+     "branch": [
+      "ZfH-gpB--_Q2tUtFlu3rG1nUvNWNibkBmnYHHlewC3Q",
+      "clS-Kmlc2uiU9D7XDw_GVcXurE5YLVfVewapmwPF364",
+      "3Xi8neTqoqWelsHe5cd4VPJ1Tq0kWYa5XiJybzIjVBw",
+      "q_T_bviui0omJXsCNRq4WAujltNl9nWXkDJf-sRWdSE"
+     ]
+    },
+    "mode": "allow"
+   },
+   {
+    "repo": "SoftDevEng/sandbox",
+    "branch": "SoftDevEng/sandbox/main",
+    "scope": {
+     "repo": [
+      "DoKG-hJiHJoJAOWwYlz3dSwZzGW7IcA97BxpkMrGDjM",
+      "JCbLoeivNGgaOciLsiZftwgudkZjLuo1PSRMYSXzmgY"
+     ],
+     "branch": [
+      "6Uedb8y4OiSHEHpQ_2efP8p7whF8J8moKWXytseAhg4",
+      "clS-Kmlc2uiU9D7XDw_GVcXurE5YLVfVewapmwPF364",
+      "3Xi8neTqoqWelsHe5cd4VPJ1Tq0kWYa5XiJybzIjVBw"
+     ]
+    },
+    "mode": "each"
+   },
+   {
+    "repo": "Other/repo",
+    "branch": "Other/repo/test/x",
+    "scope": {
+     "repo": [
+      "T7KclrgCDnBZ7pQIGxTAAYeC75kd6ZUbkMkC_Q-aWTU",
+      "wMrwlP5hDoGRuOQ6I8_r0TkBYnqQKJrQFt-_Rgktv44"
+     ],
+     "branch": [
+      "SrLWFaimm9kcaEJZwp6a-jo5I7-yHvbBzNdoq5jT1qo",
+      "ioh9iALaiJsQrOGaM4S8m6IK_7PNS7I2TPd-HNN2x8c",
+      "4j8KdEyO4J3IkXrrmj1JxxfdqWqEVhVIgXBQ9SHfXe4",
+      "GIVgFuihAgSfYAJHmer9FbWoFv-RK9OYxFGPtIOaLaE"
+     ]
+    },
+    "mode": "each"
+   },
+   {
+    "repo": null,
+    "branch": null,
+    "scope": {},
+    "mode": "each"
+   }
+  ]
+ },
  "must_fail": {
   "open": [
    {

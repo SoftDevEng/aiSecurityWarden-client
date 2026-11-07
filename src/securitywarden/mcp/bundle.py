@@ -130,6 +130,11 @@ def pack(cls: type[Connector]) -> dict[str, Any]:
 
 def summary(bundle: dict[str, Any]) -> dict[str, Any]:
     raw = bundle_bytes(bundle)
+    if bundle.get("format") == "sw-proxy/1":        # an approval proxy's mapping file
+        from .proxy import mapped_tools
+        return {"name": bundle["name"], "title": bundle.get("title") or bundle["name"], "size": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(), "tools": mapped_tools(bundle), "kind": "proxy",
+                "secrets": bundle.get("secrets") or [], "suggested_rules": bundle.get("suggested_rules") or []}
     return {"name": bundle["name"], "title": bundle.get("title") or bundle["name"], "size": len(raw),
             "sha256": hashlib.sha256(raw).hexdigest(), "tools": bundle.get("tools") or [],
             "secrets": bundle.get("secrets") or [], "suggested_rules": bundle.get("suggested_rules") or []}

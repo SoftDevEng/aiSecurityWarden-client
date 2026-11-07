@@ -410,6 +410,40 @@ def decrypt_action_summary(project_key: bytes, project_id: str, request_id: str,
     return data
 
 
+SCOPE_LEVELS = 8                # "a/b/c" also matches rules for "a/*" and "a/b/*", up to this many levels
+
+
+def scope_macs(project_key: bytes, key: str, value: str) -> list[str]:
+    """What an action request sends for one scope value (e.g. repo = "SoftDevEng/sandbox"): keyed hashes of the
+    value and of each of its "/" prefixes with "/*" ("SoftDevEng/*"), so the server can match rules like
+    ``[repo=SoftDevEng/*]`` without learning the names. The website hashes a rule's value with
+    :func:`scope_mac` the same way."""
+    parts = value.split("/")
+    values = [value] + ["/".join(parts[:i]) + "/*" for i in range(1, min(len(parts), SCOPE_LEVELS))]
+    return [scope_mac(project_key, key, v) for v in values]
+
+
+def scope_mac(project_key: bytes, key: str, value: str) -> str:
+    k = hkdf(project_key, b"securitywarden/v1/action-scope")
+    return b64e(hmac.new(k, f"{key}={value}".encode("utf-8"), hashlib.sha256).digest())
+
+
+def seal_rule_scope(project_key: bytes, project_id: str, where_text: str) -> tuple[dict[str, list[str]], str]:
+    """A rule's scope (``repo=SoftDevEng/*``) as the server stores it: each value's keyed hash, and the text
+    encrypted under the project key so the website and swctl can show it again."""
+    from .approval import parse_where_text
+    values = parse_where_text(where_text)
+    canon = ", ".join(f"{k}={v}" for k, v in values.items())
+    where = {k: [scope_mac(project_key, k, v)] for k, v in values.items()}
+    k = hkdf(project_key, b"securitywarden/v1/rule-scope")
+    return where, seal(k, canon.encode("utf-8"), f"{PREFIX}|where|{project_id}")
+
+
+def open_rule_scope(project_key: bytes, project_id: str, blob: str) -> str:
+    k = hkdf(project_key, b"securitywarden/v1/rule-scope")
+    return open_(k, blob, f"{PREFIX}|where|{project_id}").decode("utf-8")
+
+
 APPROVAL_COMMENT_MAX = 1000     # characters
 
 
