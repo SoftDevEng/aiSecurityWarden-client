@@ -137,6 +137,11 @@ class TokenStore:
         except CryptoError as err:
             raise SecurityWardenError(f"the token {e['name']!r} in {self.path} is damaged ({err})") from None
 
+    def name_of(self, token_id: str) -> str | None:
+        """The name stored for ``token_id`` (also for a replaced one), or None."""
+        e = self._load().get(token_id)
+        return e["name"] if e else None
+
     def resolve(self, token_id: str) -> str | None:
         """The live token for ``token_id``, following replacements; None if there is none."""
         all_ = self._load()

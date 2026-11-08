@@ -593,9 +593,15 @@ is created (website, `swctl admin token create --setup-code`), working once, for
   worthless, so it may sit in a chat with the agent or an email. If setup says a code was already used and
   nobody here used it, someone else collected the token: revoke it.
 
-- `POST /v1/setup/{setup_id}?name=<token name>`: a machine set up for a named token sends its name; a code for a
-  token with another name answers 409 `setup_code_for_another_token: <its name>` and is **not** used up. The
-  answer carries the token's `name` and `project` (names aren't secret).
+- `POST /v1/setup/{setup_id}?name=<token name>&token_id=<id>&replaces=<old id>`: the machine says which token it is
+  set up for, and a code for another token answers 409 `setup_code_for_another_token: <its name>` and is **not**
+  used up. `name`: the token's name (SW_TOKEN_NAME, or the stored entry's); `token_id`: its id, sent when the
+  program knows only that; `replaces`: the revoked token a machine is replacing (a token file of its own, or the
+  stored entry): the code's token must have the same name and owner. Every setup sends what it knows, so with
+  several MCP servers on one agent, only the right one takes a code. The answer carries the token's `name`,
+  `project` and `account` tag (names aren't secret).
+- The `securitywarden_setup` tool's description names its token ("the token 'Jarvis Gmail' (id …)", or the token
+  file), so an agent with several sees which is which; a refused code tells it to use the other server's tool.
 - A used code is kept a day, marked used (its ciphertext emptied), so the page that made it can see it was
   collected: `GET {prefix}/tokens/{tid}/setup-codes/{setup_id}` → `waiting` | `used` (time, address) | `expired`.
   The website closes its setup dialog when it reads `used`, and says from which address.
