@@ -183,18 +183,32 @@ def _hub(args: argparse.Namespace, cfg: dict[str, Any]) -> Hub:
     if token_file:
         target = SetupTarget(url, token_file, make, verify)
         state = (lambda: default_state_path(token_file))
+        tool_cache = (lambda: os.path.join(os.path.dirname(os.path.abspath(os.path.expanduser(token_file))),
+                                           "tool-cache", os.path.basename(token_file) + ".json"))
     else:
         store = TokenStore()
         target = SetupTarget(url, None, make, verify, store=store, token_name=_token_name(args, cfg),
                              token_id=_token_id(args, cfg))
         state = (lambda: _versions_path(store, target))
+        tool_cache = (lambda: _tool_cache_path(store, target))
     client = None
     try:
         if target.has_token():
             client = make(target.load())
     except SecurityWardenError as e:
         print(f"sw-mcp: {e}", file=sys.stderr, flush=True)
-    return Hub(client, connectors, setup=target, source=_source(state))
+    return Hub(client, connectors, setup=target, source=_source(state), tool_cache=tool_cache)
+
+
+def _tool_cache_path(store: TokenStore, target: SetupTarget) -> str | None:
+    """Where this token's last tool list is remembered (by token id; nothing secret in it)."""
+    try:
+        tid = target._pick()
+    except SecurityWardenError:
+        return None
+    if not tid:
+        return None
+    return os.path.join(os.path.dirname(store.path), "tool-cache", "id-" + re.sub(r"[^A-Za-z0-9._-]", "_", tid) + ".json")
 
 
 def _versions_path(store: TokenStore, target: SetupTarget) -> str:
@@ -298,8 +312,11 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         say("FAIL", "no server URL: set SW_SERVER_URL in the MCP entry (or --server)")
         sys.exit(1)
     say("ok", f"server {url}")
+    cache_path: str | None = None
     if token_file:
         tid = file_token_id(token_file)
+        cache_path = os.path.join(os.path.dirname(os.path.abspath(os.path.expanduser(token_file))), "tool-cache",
+                                  os.path.basename(token_file) + ".json")
         say("ok" if tid else "FAIL", f"token file {token_file}" + (f": token {tid}" if tid else ": no token in it yet"))
         cred: Any = _read_cred_file(token_file) if tid else None
     elif os.environ.get("SW_ACCESS_TOKEN"):
@@ -319,6 +336,8 @@ def cmd_doctor(args: argparse.Namespace) -> None:
                 "securitywarden_setup until it gets a setup code")
             sys.exit(1)
         e = store.entry(tid)
+        cache_path = os.path.join(os.path.dirname(store.path), "tool-cache",
+                                  "id-" + re.sub(r"[^A-Za-z0-9._-]", "_", tid) + ".json")
         say("ok", f"token {e['name']!r} (id {tid}, project {e.get('project') or '?'}) from {store.path}, found by {asked}")
         if e.get("server") and e["server"].rstrip("/").lower() != url.rstrip("/").lower():
             say("WARN", f"that token was set up for {e['server']}, but this entry uses {url}")
@@ -385,21 +404,39 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         say("ok", f"named in the MCP settings: {', '.join(c.name for c in named)}")
 
     # 5. the tools that come out, built the way `serve` builds them (its rollback records go to a scratch folder,
-    # so this check never changes what the agent's own server has seen)
+    # so this check never changes what the agent's own server has seen). The tool list it finds is remembered for
+    # the agent's server, as serve does, so its next start offers it at once.
     import tempfile
     scratch = tempfile.mkdtemp(prefix="sw-mcp-doctor-")
-    hub = Hub(client, named, source=_source(lambda: os.path.join(scratch, "versions.json")), log=lambda m: None)
+    hub = Hub(client, named, source=_source(lambda: os.path.join(scratch, "versions.json")), log=lambda m: None,
+              tool_cache=(lambda: cache_path))
+    waiting = False
     try:
         hub.refresh(force=True)
+
+        def pins() -> list[Any]:
+            return [i for i in hub.instances if getattr(type(i), "_pin_request", None)]
+        told_pin: set[str] = set()
+        while pins() and time.monotonic() < deadline:
+            for inst in pins():
+                rid = type(inst)._pin_request["request_id"]
+                if rid not in told_pin:
+                    told_pin.add(rid)
+                    print(f"       waiting for approval of {inst.name}'s tool list (request {rid})...", flush=True)
+            time.sleep(3)
+            hub.refresh(force=True)
         tools = hub.list_tools()
         extra = [t["name"] for t in tools if t["name"] not in (Hub.CHECK_TOOL, Hub.SETUP_TOOL)]
-        say("ok" if extra else "FAIL", f"{len(tools)} tools offered ({len(extra)} from connectors)")
+        waiting = bool(pins())
+        say("ok" if extra else ("WAIT" if waiting else "FAIL"),
+            f"{len(tools)} tools offered ({len(extra)} from connectors)")
         for inst in hub.instances:
             n = sum(1 for t in extra if t.startswith(inst.name + "_"))
             print(f"         {inst.name:<14} {n} tools")
             req = getattr(type(inst), "_pin_request", None)
             if req:
-                say("WAIT", f"{inst.name}: waiting for you to approve its tool list (request {req['request_id']})")
+                say("WAIT", f"{inst.name}: its tools are offered once you approve its tool list (request "
+                    f"{req['request_id']}, on the website or your phone). Then run this again, or add --wait 300")
             problem = getattr(type(inst), "_problem", None)
             if problem:
                 say("FAIL", f"{inst.name}: its MCP server isn't available ({problem})")
@@ -410,6 +447,9 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     print()
     if problems:
         print("Something on our side needs fixing first: see FAIL above.")
+    elif waiting:
+        print("Waiting for your approval (see WAIT above); nothing is wrong.")
+        sys.exit(2)
     else:
         print(f"aiSecurityWarden offers {len(tools)} tools for this token. If the agent app shows fewer, it read the "
               "list before the session was approved: refresh its tools or start a new session (Hermes keeps a "

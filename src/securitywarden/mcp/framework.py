@@ -303,7 +303,8 @@ class Hub:
 
     def __init__(self, client: Any, connectors: Sequence[type[Connector]], *, setup: SetupTarget | None = None,
                  log: Callable[[str], None] = _log, clock: Callable[[], float] = time.monotonic,
-                 source: Any = None, refresh_every: float = 30.0) -> None:
+                 source: Any = None, refresh_every: float = 30.0,
+                 tool_cache: Callable[[], str | None] | None = None) -> None:
         self.client = client
         self.setup = setup
         self.offer_setup = setup is not None      # first setup, and a new token after the old one was revoked
@@ -323,6 +324,12 @@ class Hub:
         self._requested: list[type[Connector]] = []   # the classes last asked for (set_connectors)
         self._stale: dict[str, str] = {}          # request id -> tool, for actions dropped by a connector update
         self.policy: dict[str, Any] | None = None  # the token's action rules, when the server sends them
+        # The tools last offered for this token, remembered on this machine (names, descriptions, schemas; no
+        # secrets, no connector code). Offered at start-up while the token's session still waits for a person, so
+        # the agent app sees its tools at once; using one asks for the approval as usual.
+        self.tool_cache = tool_cache
+        self._remembered: dict[str, dict[str, Any]] | None = None
+        self._loaded_ok = source is None           # the server's connector list was read at least once
         self.set_connectors(self.static, strict=True)
 
     def set_connectors(self, connectors: Sequence[type[Connector]], *, strict: bool = False) -> bool:
@@ -371,9 +378,10 @@ class Hub:
         self.instances, self.tools = instances, tools
         return changed
 
-    def refresh(self, *, force: bool = False) -> None:
+    def refresh(self, *, force: bool = False, raise_pending: bool = False) -> None:
         """Pick up connectors turned on, off or updated in SecurityWarden (at most every refresh_every s), and
-        approval proxies whose upstream came up or changed its tools."""
+        approval proxies whose upstream came up or changed its tools. ``raise_pending``: raise ApprovalPending
+        (for a call that needs the connectors now) instead of trying again later."""
         self._refresh_proxies()
         if self.source is None or self.client is None:
             return
@@ -384,6 +392,9 @@ class Hub:
         try:
             extra = self.source.classes(self.client, self.log)
         except ApprovalPending as e:
+            self._refreshed_at = None       # look again as soon as asked: the person may approve any moment
+            if raise_pending:
+                raise
             # say so (once per request): otherwise the agent just sees no connector tools and nobody knows why
             if getattr(self, "_told_pending", None) != e.approval_id:
                 self._told_pending = e.approval_id
@@ -397,6 +408,7 @@ class Hub:
             self.log(f"couldn't check SecurityWarden for connector updates ({_short(e)})")
             return
         before = self.visible_tools()
+        self._loaded_ok = True
         self.policy = getattr(self.source, "policy", None)
         if extra is not None and self.set_connectors(self.static + list(extra)):
             self.tools_changed = True
@@ -435,6 +447,46 @@ class Hub:
 
     # -- listing --------------------------------------------------------------------
 
+    # -- remembered tool list ------------------------------------------------------------
+
+    def remembered(self) -> dict[str, dict[str, Any]]:
+        """The tools last offered for this token on this machine, by name (empty if none or unreadable)."""
+        if self._remembered is None:
+            self._remembered = {}
+            path = self.tool_cache() if self.tool_cache else None
+            try:
+                with open(path, encoding="utf-8") as f:              # type: ignore[arg-type]
+                    data = json.load(f)
+                for t in data.get("tools") or []:
+                    if isinstance(t, dict) and isinstance(t.get("name"), str) and isinstance(t.get("description"), str) \
+                            and isinstance(t.get("inputSchema"), dict) and t["name"] not in (self.CHECK_TOOL,
+                                                                                            self.SETUP_TOOL):
+                        self._remembered[t["name"]] = t
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+        return self._remembered
+
+    def _remember_tools(self, tools: list[dict[str, Any]]) -> None:
+        if not self.tool_cache:
+            return
+        current = {t["name"]: t for t in tools}
+        if current == self.remembered():
+            return
+        path = self.tool_cache()
+        if not path:
+            return
+        try:
+            from ..client.setup import write_private
+            write_private(path, json.dumps({"format": "sw-tool-cache-1", "saved_at": int(time.time()),
+                                            "tools": tools}, sort_keys=True))
+            self._remembered = current
+        except OSError as e:
+            self.log(f"couldn't remember the tool list ({type(e).__name__})")
+
+    def _connectors_waiting(self) -> bool:
+        """The server's connector list couldn't be read yet (the token's session waits for a person, or no token)."""
+        return self.client is None or not self._loaded_ok
+
     def list_tools(self) -> list[dict[str, Any]]:
         self.refresh()
         self.tools_changed = False      # the agent is reading the new list right now
@@ -452,6 +504,17 @@ class Hub:
                         "inputSchema": getattr(spec, "input_schema", None) or spec.schema(),
                         "annotations": {"readOnlyHint": spec.action.split(".")[1] == "read",
                                         "destructiveHint": spec.risk == "high"}})
+        # approval proxies whose new tool list waits for a person: their tools are hidden meanwhile
+        pin_waiting = {inst.name for inst in self.instances if getattr(type(inst), "_pin_request", None)}
+        listed = {t["name"] for t in out}
+        if self._connectors_waiting():
+            # not loaded yet: offer what this token had last time; the first call asks for the approval
+            out += [t for n, t in sorted(self.remembered().items()) if n not in listed]
+        elif pin_waiting:
+            out += [t for n, t in sorted(self.remembered().items())
+                    if n not in listed and n.split("_", 1)[0] in pin_waiting]
+        else:
+            self._remember_tools(out)       # what this token has now (an empty list forgets the old one)
         out.append({
             "name": self.CHECK_TOOL,
             "description": "Check on an action that is waiting for the user's approval, and do it once approved. "
@@ -493,13 +556,16 @@ class Hub:
             return Result(f"SecurityWarden can't pick this agent's token: {e}.", True)
         if not loaded:
             return Result(NOT_SET_UP if self.setup else "SecurityWarden has no token configured.", True)
-        if not known:                   # maybe a connector turned on in SecurityWarden since the last look
-            self.refresh(force=True)
-            if name not in self.tools:
-                raise KeyError(name)
         if name == self.CHECK_TOOL and arguments.get("request_id") in self.pending_calls:
             name, arguments, _deadline = self.pending_calls.pop(arguments["request_id"])
+            known = name in self.tools
         try:
+            if not known:               # a remembered tool, or a connector turned on in SecurityWarden since
+                self.refresh(force=True, raise_pending=name in self.remembered())
+                if name not in self.tools:
+                    if name in self.remembered():
+                        return self._gone(name)
+                    raise KeyError(name)
             return self._call(name, arguments)
         except ApprovalPending as e:
             return self._waiting_for_person(e, name, arguments)
@@ -507,6 +573,18 @@ class Hub:
             self.log(f"{name}: the token was rejected (revoked or expired)")
             return Result(TOKEN_REJECTED if self.setup else
                           "SecurityWarden no longer accepts this machine's token (revoked or expired).", True)
+
+    def _gone(self, name: str) -> Result:
+        """A remembered tool the token doesn't have now."""
+        prefix = name.split("_", 1)[0]
+        for inst in self.instances:
+            req = getattr(type(inst), "_pin_request", None)
+            if inst.name == prefix and req:
+                return Result(f"{name} is waiting for the user to approve {inst.name}'s tool list in SecurityWarden "
+                              f"(request {req['request_id']}). Try again after they have.", True)
+        self.tools_changed = True
+        return Result(f"{name} isn't available any more (its connector was turned off, changed, or the token's rules "
+                      "now deny it). Look at the tool list again.", True)
 
     def _call(self, name: str, arguments: dict[str, Any]) -> Result:
         if name == self.CHECK_TOOL:

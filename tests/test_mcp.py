@@ -361,3 +361,66 @@ def test_sw_mcp_call_waits_for_approval(monkeypatch, capsys):
     with pytest.raises(SystemExit):
         cli.main(["call", "notes_delete", "ids=n3", "--wait", "0", "--connector", "test_mcp:Notes"])
     assert "nothing was done" in capsys.readouterr().err
+
+
+# -- the tool list remembered per token (offered while the session waits for a person) -------------------------
+
+class WaitingSource:
+    """The server's connector list for a token: while ``pending``, reading it needs a person's approval first."""
+
+    def __init__(self, classes):
+        self.list = list(classes)
+        self.pending = True
+        self.policy = None
+
+    def classes(self, client, log):
+        from securitywarden.client.api import ApprovalPending
+        if self.pending:
+            raise ApprovalPending({"approval_id": "req-1", "match": "42", "expires_in": 120}, "auth")
+        return list(self.list)
+
+
+def test_a_remembered_tool_list_is_offered_while_the_session_waits(tmp_path):
+    cache = str(tmp_path / "tool-cache" / "id-x.json")
+    src = WaitingSource([Notes])
+    src.pending = False
+    first = Hub(FakeServer({"notes.read.note": "allow"}), [], source=src, tool_cache=lambda: cache, log=lambda m: None)
+    names = {t["name"] for t in first.list_tools()}
+    assert {"notes_read", "notes_delete"} <= names
+    saved = json.load(open(cache))
+    assert {t["name"] for t in saved["tools"]} == names - {"check_approval"} and "NOTES_KEY" not in open(cache).read()
+
+    # next start: the session waits for a person. The agent still sees the tools at once...
+    src = WaitingSource([Notes])
+    hub = Hub(FakeServer({"notes.read.note": "allow"}), [], source=src, tool_cache=lambda: cache, log=lambda m: None)
+    names = {t["name"] for t in hub.list_tools()}
+    assert {"notes_read", "notes_delete", "check_approval"} <= names
+    # ...and using one asks for the approval, as any call would
+    w = hub.call("notes_read", {"id": "n1"})
+    assert w.data["status"] == "waiting_for_approval" and w.data["match"] == "42"
+    assert hub.call("check_approval", {"request_id": w.data["request_id"]}).data["status"] == "waiting_for_approval"
+    src.pending = False                               # the person approved
+    done = hub.call("check_approval", {"request_id": w.data["request_id"]})
+    assert not done.is_error and "Buy milk" in done.text
+
+
+def test_a_remembered_tool_the_token_no_longer_has(tmp_path):
+    cache = str(tmp_path / "c.json")
+    src = WaitingSource([Notes])
+    src.pending = False
+    Hub(FakeServer(), [], source=src, tool_cache=lambda: cache, log=lambda m: None).list_tools()
+    src2 = WaitingSource([])                          # connector unticked meanwhile
+    hub = Hub(FakeServer(), [], source=src2, tool_cache=lambda: cache, log=lambda m: None)
+    assert "notes_read" in {t["name"] for t in hub.list_tools()}
+    src2.pending = False
+    r = hub.call("notes_read", {"id": "n1"})
+    assert r.is_error and "isn't available any more" in r.text
+    # the real list is read now: the remembered one is replaced (nothing left to offer)
+    assert {t["name"] for t in hub.list_tools()} == {"check_approval"}
+    assert json.load(open(cache))["tools"] == []
+
+
+def test_no_remembered_list_offers_only_the_built_in_tools(tmp_path):
+    hub = Hub(FakeServer(), [], source=WaitingSource([Notes]), tool_cache=lambda: str(tmp_path / "none.json"),
+              log=lambda m: None)
+    assert {t["name"] for t in hub.list_tools()} == {"check_approval"}

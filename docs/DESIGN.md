@@ -644,6 +644,12 @@ on the website, for people and as a fallback); the website's token set-up shows 
 - `SW_ACCESS_TOKEN_FILE` (a file per token) and `SW_ACCESS_TOKEN` keep working and take precedence.
 - Every process of that user can read every token in the file, as it could read separate files before; one
   user per machine trust boundary, as before.
+- Remembered tool list: `tool-cache/id-<token id>.json` (or `tool-cache/<token file name>.json`), owner-only: the
+  tools last offered for the token (names, descriptions, input schemas; no secrets, no connector code). While the
+  token's session still waits for a person, `sw-mcp` offers these at start-up, so the agent app sees its tools at
+  once; calling one asks for the approval as usual and runs once the connectors load. A remembered tool the token no
+  longer has answers "isn't available any more". Rewritten whenever the real list is read (not while an approval
+  proxy's new tool list waits for a person, so it only ever holds tool descriptions a person approved).
 - Connector rollback state: `connector-versions/id-<token id>.json` in the same folder (before 0.6.0.dev19
   `<token name>.json`, copied over once).
 

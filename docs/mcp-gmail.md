@@ -140,7 +140,9 @@ SW_SERVER_URL=https://app.aisecuritywarden.com SW_TOKEN_ID=<id> SW_TOKEN_NAME="<
 4. which connectors the server gives this token (ticked under Tokens → Manage → Connectors);
 5. the tools that come out, per connector.
 
-If doctor lists the full set and the agent shows only `check_approval` and `securitywarden_setup`, the agent app
-read the tool list before the session was approved: refresh its tools, or start a new session (Hermes keeps a
-session's tool list). `sw-mcp serve` also logs "connectors not loaded yet: waiting for a person to approve …"
+From client 0.6.0.dev23 on, `sw-mcp` remembers each token's last tool list (no secrets), and offers it at start-up
+while the session still waits for approval, so a new agent session or a tools refresh shows the tools at once; the
+first tool call asks for the approval. Running `doctor` once after approving also stores the list. If doctor lists
+the full set and the agent still shows only `check_approval` and `securitywarden_setup`, refresh the agent's tools or
+start a new session (Hermes keeps a session's tool list). `sw-mcp serve` also logs "connectors not loaded yet: waiting for a person to approve …"
 in that case.
