@@ -24,10 +24,11 @@ import json
 import os
 import re
 import sys
+import time
 from typing import Any
 
 from .. import __version__
-from ..client.api import SecurityWardenClient, SecurityWardenError, _check_url
+from ..client.api import ApprovalPending, SecurityWardenClient, SecurityWardenError, _check_url
 from ..client.cli import _read_cred_file
 from ..client.setup import setup_from_code, setup_into_store, token_file_exists
 from ..client.tokens import TokenStore
@@ -273,6 +274,149 @@ def cmd_tools(args: argparse.Namespace) -> None:
     print("  check_approval     (built in: check on, and then do, an action waiting for approval)")
 
 
+def cmd_doctor(args: argparse.Namespace) -> None:
+    """Check, step by step, what this MCP server would offer an agent with these settings (the same environment
+    as the agent's MCP entry): which token, whether the server answers and accepts it, whether a person must
+    approve first, which connectors the server gives this token, and the tools that come out. Never prints a
+    secret. Tells whether a short tool list comes from us or from the agent app."""
+    import httpx
+    from ..client.api import TokenRejected
+    from ..client.setup import file_token_id
+    cfg = _config(args)
+    url, token_file, verify = _settings(args, cfg)
+    problems = 0
+    test_http = getattr(args, "_http", None)        # tests: an in-process server
+
+    def say(mark: str, text: str) -> None:
+        nonlocal problems
+        problems += mark == "FAIL"
+        print(f"[{mark:<4}] {text}", flush=True)
+
+    # 1. settings and token
+    print("sw-mcp doctor: what an agent with these MCP settings is offered\n")
+    if not url:
+        say("FAIL", "no server URL: set SW_SERVER_URL in the MCP entry (or --server)")
+        sys.exit(1)
+    say("ok", f"server {url}")
+    if token_file:
+        tid = file_token_id(token_file)
+        say("ok" if tid else "FAIL", f"token file {token_file}" + (f": token {tid}" if tid else ": no token in it yet"))
+        cred: Any = _read_cred_file(token_file) if tid else None
+    elif os.environ.get("SW_ACCESS_TOKEN"):
+        say("ok", "token from SW_ACCESS_TOKEN")
+        cred = os.environ["SW_ACCESS_TOKEN"]
+    else:
+        store = TokenStore()
+        asked = ", ".join(f"{k}={v}" for k, v in (("SW_TOKEN_ID", _token_id(args, cfg)),
+                                                    ("SW_TOKEN_NAME", _token_name(args, cfg))) if v) or "nothing"
+        try:
+            tid = store.pick(_token_name(args, cfg), token_id=_token_id(args, cfg), server=url)
+        except SecurityWardenError as e:
+            say("FAIL", f"which token: {e}")
+            sys.exit(1)
+        if not tid:
+            say("FAIL", f"no token in {store.path} for {asked} (see: swctl tokens list). The agent offers only "
+                "securitywarden_setup until it gets a setup code")
+            sys.exit(1)
+        e = store.entry(tid)
+        say("ok", f"token {e['name']!r} (id {tid}, project {e.get('project') or '?'}) from {store.path}, found by {asked}")
+        if e.get("server") and e["server"].rstrip("/").lower() != url.rstrip("/").lower():
+            say("WARN", f"that token was set up for {e['server']}, but this entry uses {url}")
+        cred = store.credential(tid)
+    if cred is None:
+        sys.exit(1)
+
+    # 2. the server
+    try:
+        if test_http is not None:
+            r = test_http.get(url.rstrip("/") + "/v1/health")
+        else:
+            with httpx.Client(timeout=15, verify=verify) as h:
+                r = h.get(url.rstrip("/") + "/v1/health")
+        info = r.json() if r.status_code == 200 else {}
+        say("ok" if r.status_code == 200 else "FAIL", f"server answers ({r.status_code})"
+            + (f", version {info.get('version')}" if info.get("version") else ""))
+    except (httpx.HTTPError, ValueError) as e:
+        say("FAIL", f"server unreachable: {type(e).__name__}")
+        sys.exit(1)
+
+    # 3. the token, and approval
+    client = SecurityWardenClient(url, cred, verify=verify, wait_for_approval=False,
+                                  **({"http": test_http} if test_http is not None else {}))
+    deadline = time.monotonic() + max(0, args.wait)
+    told = None
+    while True:
+        try:
+            client.check_token()
+            say("ok", "token accepted; session open")
+            break
+        except ApprovalPending as e:
+            if time.monotonic() >= deadline:
+                say("WAIT", f"a person must approve this token's session first (match code {e.match}). Until then "
+                    "the agent gets only check_approval and securitywarden_setup. Approve it, then run this again "
+                    "(or add --wait 300 to wait here)")
+                sys.exit(2)
+            if told != e.approval_id:
+                told = e.approval_id
+                print(f"       waiting for approval of this session (match code {e.match})...", flush=True)
+            time.sleep(3)
+        except TokenRejected:
+            say("FAIL", "the server rejects this token (revoked or expired): make a new token and give the agent "
+                "its setup code")
+            sys.exit(1)
+        except SecurityWardenError as e:
+            say("FAIL", f"sign-in failed: {e}")
+            sys.exit(1)
+
+    # 4. what the server gives this token
+    try:
+        listing = client.connectors()
+    except SecurityWardenError as e:
+        say("FAIL", f"connector list: {e}")
+        sys.exit(1)
+    builtin = listing.get("builtin") or []
+    custom = listing.get("custom") or []
+    say("ok" if builtin or custom else "WARN",
+        f"server gives this token: built-in {', '.join(builtin) or 'none'}; uploaded {len(custom)}"
+        + ("" if builtin or custom else ". Tick connectors for this token on the website (Tokens, Manage, "
+                                       "Connectors), with the connector switched on for its project"))
+    named = _connectors(args, cfg)
+    if named:
+        say("ok", f"named in the MCP settings: {', '.join(c.name for c in named)}")
+
+    # 5. the tools that come out, built the way `serve` builds them (its rollback records go to a scratch folder,
+    # so this check never changes what the agent's own server has seen)
+    import tempfile
+    scratch = tempfile.mkdtemp(prefix="sw-mcp-doctor-")
+    hub = Hub(client, named, source=_source(lambda: os.path.join(scratch, "versions.json")), log=lambda m: None)
+    try:
+        hub.refresh(force=True)
+        tools = hub.list_tools()
+        extra = [t["name"] for t in tools if t["name"] not in (Hub.CHECK_TOOL, Hub.SETUP_TOOL)]
+        say("ok" if extra else "FAIL", f"{len(tools)} tools offered ({len(extra)} from connectors)")
+        for inst in hub.instances:
+            n = sum(1 for t in extra if t.startswith(inst.name + "_"))
+            print(f"         {inst.name:<14} {n} tools")
+            req = getattr(type(inst), "_pin_request", None)
+            if req:
+                say("WAIT", f"{inst.name}: waiting for you to approve its tool list (request {req['request_id']})")
+            problem = getattr(type(inst), "_problem", None)
+            if problem:
+                say("FAIL", f"{inst.name}: its MCP server isn't available ({problem})")
+    finally:
+        hub.close()
+        import shutil
+        shutil.rmtree(scratch, ignore_errors=True)
+    print()
+    if problems:
+        print("Something on our side needs fixing first: see FAIL above.")
+    else:
+        print(f"aiSecurityWarden offers {len(tools)} tools for this token. If the agent app shows fewer, it read the "
+              "list before the session was approved: refresh its tools or start a new session (Hermes keeps a "
+              "session's tool list).")
+    sys.exit(1 if problems else 0)
+
+
 def _parse_call_args(hub: Hub, tool_name: str, pairs: list[str]) -> dict[str, Any]:
     """name=value pairs typed on the command line, converted using the tool's schema (lists: commas)."""
     schema = next((t["inputSchema"] for t in hub.list_tools() if t["name"] == tool_name), None)
@@ -506,6 +650,10 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("--live", action="store_true",
                    help="sign in and list exactly what the agent is offered now (incl. connectors from the website)")
     t.set_defaults(fn=cmd_tools)
+    d = sub.add_parser("doctor", help="check what an agent with these MCP settings is offered, step by step")
+    common(d)
+    d.add_argument("--wait", type=int, default=0, help="seconds to wait for a person to approve (default: don't wait)")
+    d.set_defaults(fn=cmd_doctor)
     c = sub.add_parser("call", help="run one tool by hand, waiting for approval if needed (for testing)")
     c.add_argument("tool", help="tool name, e.g. gmail_search (see: sw-mcp tools)")
     c.add_argument("values", nargs="*", help="arguments as NAME=VALUE; lists separated by commas; \\n for a new line")

@@ -383,8 +383,16 @@ class Hub:
         self._refreshed_at = now
         try:
             extra = self.source.classes(self.client, self.log)
-        except (ApprovalPending, TokenRejected):
-            return                      # the tool call itself reports these
+        except ApprovalPending as e:
+            # say so (once per request): otherwise the agent just sees no connector tools and nobody knows why
+            if getattr(self, "_told_pending", None) != e.approval_id:
+                self._told_pending = e.approval_id
+                self.log(f"connectors not loaded yet: waiting for a person to approve this token's session (match code "
+                         f"{e.match}). Approve it on the website or your phone, then refresh the agent's tools or "
+                         "start a new session.")
+            return
+        except TokenRejected:
+            return                      # the tool call itself reports this
         except Exception as e:  # noqa: BLE001 - never let this stop the tools that are loaded
             self.log(f"couldn't check SecurityWarden for connector updates ({_short(e)})")
             return
