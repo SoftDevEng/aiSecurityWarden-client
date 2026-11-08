@@ -124,3 +124,23 @@ secret; the token itself never goes in the MCP settings.
 - Revoking the SecurityWarden token stops the agent at once. To cut Gmail access too, remove the app at
   <https://myaccount.google.com/permissions>.
 - Waiting actions are kept by the `sw-mcp` process; if it restarts, the agent just asks again.
+
+## The agent shows fewer tools than expected
+
+Run `sw-mcp doctor` on the agent's machine with the same settings as its MCP entry (the same environment
+variables, or `--server`, `--token-id`, `--token-name`). It checks, step by step, and never prints a secret:
+
+```bash
+SW_SERVER_URL=https://app.aisecuritywarden.com SW_TOKEN_ID=<id> SW_TOKEN_NAME="<name>" sw-mcp doctor --wait 300
+```
+
+1. which token the settings find (`SW_Tokens.json`, or the token file);
+2. whether the server answers, and its version;
+3. whether the token is accepted, or a person must approve its session first (match code shown; `--wait` waits);
+4. which connectors the server gives this token (ticked under Tokens → Manage → Connectors);
+5. the tools that come out, per connector.
+
+If doctor lists the full set and the agent shows only `check_approval` and `securitywarden_setup`, the agent app
+read the tool list before the session was approved: refresh its tools, or start a new session (Hermes keeps a
+session's tool list). `sw-mcp serve` also logs "connectors not loaded yet: waiting for a person to approve …"
+in that case.
