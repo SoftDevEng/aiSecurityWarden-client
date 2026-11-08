@@ -698,6 +698,43 @@ def redeem_setup_code(server_url: str, code: str, *, http: httpx.Client | None =
     return redeem_setup_code_info(server_url, code, http=http, verify=verify, timeout=timeout)[0]
 
 
+def token_identity(server_url: str, cred: Credential | str, *, http: httpx.Client | None = None,
+                   verify: bool | str = True, timeout: float = 30.0) -> dict[str, Any]:
+    """{"id", "name", "project", "account"} of a machine token, asked of the server with the token itself (from an
+    allowed address; no session, so no approval). For importing older token files that don't record their name."""
+    if isinstance(cred, str):
+        try:
+            cred = crypto.parse_credential(cred)
+        except CryptoError as e:
+            raise SecurityWardenError(str(e)) from None
+    base = server_url.rstrip("/") if http is not None else _check_url(server_url)
+    own = http is None
+    client = http or httpx.Client(timeout=timeout, verify=verify)
+    try:
+        r = client.post(f"{base}/v1/tokens/whoami", json={"id": cred.id, "secret": cred.secret})
+    except httpx.HTTPError as e:
+        raise SecurityWardenError(f"couldn't reach {base} ({type(e).__name__})") from None
+    finally:
+        if own:
+            client.close()
+    if r.status_code == 401:
+        raise SecurityWardenError("the server doesn't accept this token (revoked, expired or from another server)")
+    if r.status_code == 403:
+        raise SecurityWardenError("this machine's address isn't allowed for that token")
+    if r.status_code in (404, 405):
+        raise SecurityWardenError("this server can't look token names up (it needs server 0.6.0.dev18 or later): "
+                                  "give --name")
+    if r.status_code == 429:
+        raise SecurityWardenError("too many failed attempts from this address; try again later")
+    if r.status_code != 200:
+        raise SecurityWardenError(f"looking the token up failed ({r.status_code}): {_detail(r)}")
+    data = r.json()
+    if not isinstance(data, dict) or data.get("id") != cred.id or not isinstance(data.get("name"), str):
+        raise SecurityWardenError("the server's answer was not about this token")
+    return {k: data.get(k) if isinstance(data.get(k), str) and len(data.get(k)) <= 200 else None
+            for k in ("id", "name", "project", "account")}
+
+
 class WrongTokenCode(SecurityWardenError):
     """The setup code is for another token than this program's; it was NOT used up. ``other``: its token's name."""
 

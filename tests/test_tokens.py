@@ -358,3 +358,42 @@ def test_swctl_tokens_list_and_import(tmp_path, monkeypatch, capsys):
     admin.write_text(str(crypto.new_credential(crypto.KIND_ADMIN)))
     with pytest.raises(SystemExit):
         swctl.main(["--server", URL, "tokens", "import", "--file", str(admin), "--name", "x"])
+
+
+def test_swctl_tokens_import_asks_the_server_for_the_name(tmp_path, monkeypatch, capsys):
+    from securitywarden.client import api, cli as swctl
+    monkeypatch.setenv("SW_TOKENS_FILE", str(tmp_path / FILE_NAME))
+    tok = m()
+    path = tmp_path / "gmail-token-keith"
+    path.write_text(str(tok) + "\n")
+    asked = []
+
+    def who(server, cred, **kw):
+        asked.append((server, cred.id))
+        return {"id": cred.id, "name": "Keith Gmail", "project": "Gmail", "account": "k-tag"}
+    monkeypatch.setattr(api, "token_identity", who)
+    swctl.main(["--server", URL, "tokens", "import", "--file", str(path)])
+    err = capsys.readouterr().err
+    assert asked == [(URL, tok.id)] and "knows this token as 'Keith Gmail'" in err and "SW_TOKEN_NAME=Keith Gmail" in err
+    e = TokenStore().entry(tok.id)
+    assert e["name"] == "Keith Gmail" and e["project"] == "Gmail" and e["account"] == "k-tag"
+
+
+def test_token_identity_reads_only_the_answer_about_this_token():
+    from securitywarden.client.api import token_identity
+    tok = m()
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        if req.url.path != "/v1/tokens/whoami":
+            return httpx.Response(404)
+        return httpx.Response(200, json={"id": tok.id, "name": "jarvis", "project": None, "account": "t"})
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    assert token_identity(URL, tok, http=http)["name"] == "jarvis"
+    assert seen[0] == {"id": tok.id, "secret": tok.secret}
+    with pytest.raises(SecurityWardenError, match="not about this token"):
+        token_identity(URL, m(), http=http)
+    old = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(405)))
+    with pytest.raises(SecurityWardenError, match="give --name"):
+        token_identity(URL, tok, http=old)

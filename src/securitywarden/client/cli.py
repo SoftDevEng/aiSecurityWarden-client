@@ -7,7 +7,7 @@ Machine use (e.g. as a Hermes Agent command helper)::
 This machine's stored tokens (never their secrets), and moving an older token file into SW_Tokens.json::
 
     swctl tokens list
-    swctl --server https://vault.example.com tokens import --file ~/.config/securitywarden/gmail-token --name jarvis-gmail
+    swctl --server https://vault.example.com tokens import --file ~/.config/securitywarden/gmail-token   # name asked
 
 Admin use::
 
@@ -305,17 +305,24 @@ def cmd_tokens(args: argparse.Namespace) -> int:
     if cred.kind != "m":
         _die(f"{path} holds an admin credential, not a machine token; it doesn't belong in SW_Tokens.json")
     server = _server(args)
+    from .api import token_identity
+    name, project, account = args.name, None, None
     try:
         if store.entry(cred.id) is not None:
-            print(f"{store.path} already holds this token ({store.entry(cred.id)['name']!r}); nothing to do.",
-                  file=sys.stderr)
+            name = store.entry(cred.id)["name"]
+            print(f"{store.path} already holds this token ({name!r}); nothing to do.", file=sys.stderr)
         else:
-            store.put(cred, name=args.name, server=server)
-            print(f"Token {args.name!r} ({cred.id}) copied into {store.path} (readable by you only).", file=sys.stderr)
+            if not name:                    # ask the server, with the token itself
+                who = token_identity(server, cred, verify=_verify(args))
+                name, project, account = who["name"], who["project"], who["account"]
+                print(f"The server knows this token as {name!r}" + (f" (project {project})" if project else "") + ".",
+                      file=sys.stderr)
+            store.put(cred, name=name, server=server, project=project, account=account)
+            print(f"Token {name!r} ({cred.id}) copied into {store.path} (readable by you only).", file=sys.stderr)
     except SecurityWardenError as e:
         _die(str(e))
     print(f"\nIn the program's MCP settings, replace SW_ACCESS_TOKEN_FILE with:\n  SW_TOKEN_ID={cred.id}\n"
-          f"  SW_TOKEN_NAME={args.name}\nand use the arguments: serve (without --connector, if the website ticks the "
+          f"  SW_TOKEN_NAME={name}\nand use the arguments: serve (without --connector, if the website ticks the "
           f"connectors for this token). Once it works, delete {path}.", file=sys.stderr)
     return 0
 
@@ -585,7 +592,7 @@ def build_parser() -> argparse.ArgumentParser:
     tks.add_parser("list", help="list them (ids, names, servers; never the secrets)")
     x = tks.add_parser("import", help="move a token file of its own (SW_ACCESS_TOKEN_FILE) into SW_Tokens.json")
     x.add_argument("--file", required=True, help="the token file")
-    x.add_argument("--name", required=True, help="the token's name on the website")
+    x.add_argument("--name", help="the token's name on the website (default: ask the server, with the token itself)")
     tk.set_defaults(func=cmd_tokens)
 
     a = sub.add_parser("admin", help="administer projects, secrets and tokens").add_subparsers(
