@@ -600,6 +600,9 @@ is created (website, `swctl admin token create --setup-code`), working once, for
   stored entry): the code's token must have the same name and owner. Every setup sends what it knows, so with
   several MCP servers on one agent, only the right one takes a code. The answer carries the token's `name`,
   `project` and `account` tag (names aren't secret).
+- `POST /v1/tokens/whoami {id, secret}`: a machine token asks its own name, project and account tag (verified like
+  signing in, from an allowed address; no session, so no approval; audited as `token.whoami`). Used by
+  `swctl tokens import` when no `--name` is given, for older token files that never recorded their name.
 - The `securitywarden_setup` tool's description names its token ("the token 'Jarvis Gmail' (id …)", or the token
   file), so an agent with several sees which is which; a refused code tells it to use the other server's tool.
 - A used code is kept a day, marked used (its ciphertext emptied), so the page that made it can see it was
