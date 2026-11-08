@@ -78,7 +78,9 @@ def build() -> dict[str, Any]:
                                        "id_re": crypto.ID_RE.pattern},
                          "approval": {"modes": list(approval.MODES), "channels": list(approval.CHANNELS),
                                       "defaults": approval.DEFAULTS,
-                                      "ranges": {k: list(r) for k, r in approval.RANGES.items()}}}
+                                      "ranges": {k: list(r) for k, r in approval.RANGES.items()},
+                                      "no_limit_fields": list(approval.NO_LIMIT_FIELDS),
+                                      "open_request_max": approval.OPEN_REQUEST_MAX}}
 
     cases: list[Any] = [
         None, {}, {"mode": "every_fetch"}, {"channels": ["push:ntfy", "admin_ui", "push:ntfy"]},
@@ -88,6 +90,9 @@ def build() -> dict[str, Any]:
         {"timeout": 14}, {"timeout": 601}, {"session_ttl": 59}, {"session_ttl": approval.MAX_SESSION_TTL + 1},
         {"max_pending": 0}, {"max_pending": True}, {"timeout": "120"}, {"timeout": 120.5}, {"surprise": 1},
         {"max_pending": 5, "max_per_hour": 2}, {"approvers": ["x"]}, [], "session",
+        # no limit (null) for the wait and the hourly count; never for the flood guard or other fields
+        {"timeout": None}, {"max_per_hour": None, "max_pending": 5}, {"timeout": None, "max_per_hour": None},
+        {"max_pending": None}, {"session_ttl": None}, {"mode": None}, {"timeout": "none"},
     ]
     v["approval"]["cases"] = []
     for case in cases:
@@ -357,7 +362,8 @@ def build() -> dict[str, Any]:
                     {"rules": [{"match": "gmail.send", "mode": "sometimes"}]}, {"rules": [{"match": "gmail.label", "mode": "window"}]},
                     {"rules": [{"match": "gmail.label", "mode": "window", "window": 10}]},
                     {"rules": [{"match": "gmail.send", "mode": "each", "window": 60}]}, {"timeout": 30},
-                    {"channels": []}, {"surprise": 1}, {"max_pending": 9, "max_per_hour": 3}]
+                    {"channels": []}, {"surprise": 1}, {"max_pending": 9, "max_per_hour": 3}, {"max_pending": None},
+                    {"timeout": "none"}]
     for b in bad_policies:
         try:
             approval.normalize_action_policy(b)
@@ -365,6 +371,8 @@ def build() -> dict[str, Any]:
             continue
         raise AssertionError(f"accepted {b}")
     v["actions"]["bad_policies"] = bad_policies
+    nl = {"timeout": None, "max_per_hour": None, "max_pending": 50}
+    v["actions"]["no_limit"] = {"input": nl, "output": approval.normalize_action_policy(nl)}
 
     # things that must fail to decrypt
     good = v["seal"][1]

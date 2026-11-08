@@ -85,8 +85,9 @@ def _config(args: argparse.Namespace) -> dict[str, Any]:
             cfg = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         _die(f"can't read config {path}: {e}")
-    if not isinstance(cfg, dict) or set(cfg) - {"server", "token_file", "token_name", "ca_bundle", "connectors"}:
-        _die(f"{path}: expected an object with server, token_name, token_file, ca_bundle, connectors")
+    if not isinstance(cfg, dict) or set(cfg) - {"server", "token_file", "token_name", "token_id", "ca_bundle",
+                                                 "connectors"}:
+        _die(f"{path}: expected an object with server, token_id, token_name, token_file, ca_bundle, connectors")
     if any(str(v).startswith("sw1.") for v in cfg.values()):
         _die(f"{path}: put the token in its own file (chmod 600) and name that file in token_file")
     return cfg
@@ -119,9 +120,14 @@ def _token_name(args: argparse.Namespace, cfg: dict[str, Any]) -> str | None:
     return getattr(args, "token_name", None) or os.environ.get("SW_TOKEN_NAME") or cfg.get("token_name") or None
 
 
-def _store_name(store: TokenStore, args: argparse.Namespace, cfg: dict[str, Any]) -> str | None:
+def _token_id(args: argparse.Namespace, cfg: dict[str, Any]) -> str | None:
+    return getattr(args, "token_id", None) or os.environ.get("SW_TOKEN_ID") or cfg.get("token_id") or None
+
+
+def _store_pick(store: TokenStore, args: argparse.Namespace, cfg: dict[str, Any], url: str | None) -> str | None:
+    """The stored token's id for this program (SW_TOKEN_ID, else SW_TOKEN_NAME + server, else the only one)."""
     try:
-        return store.pick(_token_name(args, cfg))
+        return store.pick(_token_name(args, cfg), token_id=_token_id(args, cfg), server=url)
     except SecurityWardenError as e:
         _die(str(e))
 
@@ -141,12 +147,13 @@ def _client(args: argparse.Namespace, cfg: dict[str, Any], *, wait: bool = True)
         cred = os.environ["SW_ACCESS_TOKEN"]
     else:
         store = TokenStore()
-        name = _store_name(store, args, cfg)
-        if not name or store.entry(name) is None:
+        tid = _store_pick(store, args, cfg, url)
+        if not tid:
+            name = _token_name(args, cfg)
             _die(f"no token {'called ' + repr(name) + ' ' if name else ''}in {store.path} yet: run sw-mcp setup "
                  "with a setup code from the website")
         try:
-            cred = store.credential(name)
+            cred = store.credential(tid)
         except SecurityWardenError as e:
             _die(str(e))
     try:
@@ -177,9 +184,9 @@ def _hub(args: argparse.Namespace, cfg: dict[str, Any]) -> Hub:
         state = (lambda: default_state_path(token_file))
     else:
         store = TokenStore()
-        target = SetupTarget(url, None, make, verify, store=store, token_name=_token_name(args, cfg))
-        state = (lambda: os.path.join(os.path.dirname(store.path), "connector-versions",
-                                      re.sub(r"[^A-Za-z0-9._-]", "_", target.token_name or "default") + ".json"))
+        target = SetupTarget(url, None, make, verify, store=store, token_name=_token_name(args, cfg),
+                             token_id=_token_id(args, cfg))
+        state = (lambda: _versions_path(store, target))
     client = None
     try:
         if target.has_token():
@@ -187,6 +194,29 @@ def _hub(args: argparse.Namespace, cfg: dict[str, Any]) -> Hub:
     except SecurityWardenError as e:
         print(f"sw-mcp: {e}", file=sys.stderr, flush=True)
     return Hub(client, connectors, setup=target, source=_source(state))
+
+
+def _versions_path(store: TokenStore, target: SetupTarget) -> str:
+    """Where this token's highest connector versions are kept (rollback protection), by token id. Before
+    0.6.0.dev19 the file was named after the token; it's carried over once."""
+    folder = os.path.join(os.path.dirname(store.path), "connector-versions")
+    safe = (lambda s: re.sub(r"[^A-Za-z0-9._-]", "_", s))
+    tid = None
+    try:
+        tid = target._pick()
+    except SecurityWardenError:
+        pass
+    by_name = os.path.join(folder, safe(target.token_name or "default") + ".json")
+    if not tid:
+        return by_name
+    by_id = os.path.join(folder, "id-" + safe(tid) + ".json")
+    if not os.path.exists(by_id) and os.path.exists(by_name):
+        try:
+            import shutil
+            shutil.copyfile(by_name, by_id)
+        except OSError:
+            pass
+    return by_id
 
 
 def cmd_serve(args: argparse.Namespace) -> None:
@@ -389,16 +419,16 @@ def cmd_setup(args: argparse.Namespace) -> None:
         _die("no server URL (use --server, SW_SERVER_URL or \"server\" in the config)")
     if token_file and token_file_exists(token_file) and not args.replace:
         _die(f"{os.path.expanduser(token_file)} already holds a token (use --replace to swap it for a new one)")
-    name = _token_name(args, cfg)
+    name, tid = _token_name(args, cfg), _token_id(args, cfg)
     store = TokenStore()
-    if not token_file and name and store.entry(name) is not None and not args.replace:
-        _die(f"{store.path} already holds a token called {name!r} (use --replace to swap it for a new one)")
+    if not token_file and (name or tid) and _store_pick(store, args, cfg, url) is not None and not args.replace:
+        _die(f"{store.path} already holds this program's token (use --replace to swap it for a new one)")
     code = sys.stdin.readline() if args.code_stdin else getpass.getpass("Setup code (SWS1-..., not shown): ")
     try:
         if token_file:
             cred, where = setup_from_code(url, code, token_file, replace=args.replace, verify=verify)
         else:
-            cred, name = setup_into_store(url, code, store, name, replace=args.replace, verify=verify)
+            cred, name = setup_into_store(url, code, store, name, token_id=tid, replace=args.replace, verify=verify)
             where = store.path
     except (SecurityWardenError, OSError) as e:
         _die(str(e))
@@ -408,7 +438,8 @@ def cmd_setup(args: argparse.Namespace) -> None:
     print("\nFor Hermes or Claude: command", exe, "with arguments: serve" +
           "".join(f" --connector {c}" for c in conns), file=sys.stderr)
     print(f"and environment SW_SERVER_URL={url} " + (f"SW_ACCESS_TOKEN_FILE={where}" if token_file
-                                                     else f"SW_TOKEN_NAME={name}"), file=sys.stderr)
+                                                     else f"SW_TOKEN_ID={cred.id} SW_TOKEN_NAME={name}"),
+          file=sys.stderr)
 
 
 def cmd_check(args: argparse.Namespace) -> None:
@@ -461,6 +492,7 @@ def main(argv: list[str] | None = None) -> None:
         sp.add_argument("--config", help="JSON config file (default: $SW_MCP_CONFIG)")
         sp.add_argument("--server", help="server URL (default: $SW_SERVER_URL)")
         sp.add_argument("--token-name", help="the token's name in SW_Tokens.json (default: $SW_TOKEN_NAME)")
+        sp.add_argument("--token-id", help="the token's id in SW_Tokens.json (default: $SW_TOKEN_ID)")
         sp.add_argument("--token-file", help="a token file of its own instead (default: $SW_ACCESS_TOKEN_FILE)")
         sp.add_argument("--ca-bundle", help="CA bundle for a private certificate (default: $SW_CA_BUNDLE)")
         if connectors:

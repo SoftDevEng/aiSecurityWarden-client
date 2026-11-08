@@ -145,11 +145,12 @@ def _machine_client(args: argparse.Namespace) -> SecurityWardenClient:
         from .tokens import TokenStore
         store = TokenStore()
         try:
-            name = store.pick(args.token_name or os.environ.get("SW_TOKEN_NAME"))
-            if not name:
-                _die(f"no machine token: none in {store.path} (swctl setup), and no --token-file, "
+            tid = store.pick(args.token_name or os.environ.get("SW_TOKEN_NAME"),
+                             token_id=args.token_id or os.environ.get("SW_TOKEN_ID"), server=_server(args))
+            if not tid:
+                _die(f"no machine token: none for this program in {store.path} (swctl setup), and no --token-file, "
                      "SW_ACCESS_TOKEN_FILE or SW_ACCESS_TOKEN")
-            cred = str(store.credential(name))
+            cred = str(store.credential(tid))
         except SecurityWardenError as e:
             _die(str(e))
     return SecurityWardenClient(_server(args), cred, verify=_verify(args), on_approval=_announce_approval)
@@ -242,20 +243,27 @@ def cmd_setup(args: argparse.Namespace) -> int:
     from .tokens import TokenStore
     path = args.token_file or os.environ.get("SW_ACCESS_TOKEN_FILE")
     name = args.token_name or os.environ.get("SW_TOKEN_NAME")
+    tid = args.token_id or os.environ.get("SW_TOKEN_ID")
     store = TokenStore()
     if path and token_file_exists(path) and not args.replace:
         _die(f"{os.path.expanduser(path)} already holds a token (use --replace to swap it for a new one)")
-    if not path and name and store.entry(name) is not None and not args.replace:
-        _die(f"{store.path} already holds a token called {name!r} (use --replace to swap it for a new one)")
+    try:
+        have = not path and (name or tid) and store.pick(name, token_id=tid, server=_server(args)) is not None
+    except SecurityWardenError as e:
+        _die(str(e))
+    if have and not args.replace:
+        _die(f"{store.path} already holds this program's token (use --replace to swap it for a new one)")
     code = sys.stdin.readline() if args.code_stdin else getpass.getpass("Setup code (SWS1-..., not shown): ")
     try:
         if path:
             cred, where = setup_from_code(_server(args), code, path, replace=args.replace, verify=_verify(args))
             print(f"Token {cred.id} stored in {where} (readable by you only).", file=sys.stderr)
         else:
-            cred, name = setup_into_store(_server(args), code, store, name, replace=args.replace, verify=_verify(args))
+            cred, name = setup_into_store(_server(args), code, store, name, token_id=tid, replace=args.replace,
+                                          verify=_verify(args))
             print(f"Token {name!r} stored in {store.path} (readable by you only). Programs use it with "
-                  f"SW_TOKEN_NAME={name} (or alone, while it's the only token there).", file=sys.stderr)
+                  f"SW_TOKEN_ID={cred.id} SW_TOKEN_NAME={name} (or alone, while it's the only token there).",
+                  file=sys.stderr)
     except (SecurityWardenError, OSError) as e:
         _die(str(e))
     return 0
@@ -319,14 +327,32 @@ def _policy_from_args(args: argparse.Namespace) -> dict | None:
         if args.session_ttl is not None:
             policy["session_ttl"] = parse_duration(args.session_ttl)
         if args.approval_timeout is not None:
-            policy["timeout"] = parse_duration(args.approval_timeout)
+            policy["timeout"] = _limit(args.approval_timeout, parse_duration)
     except ValueError as e:
         _die(str(e))
     if args.max_pending is not None:
         policy["max_pending"] = args.max_pending
     if args.max_per_hour is not None:
-        policy["max_per_hour"] = args.max_per_hour
+        policy["max_per_hour"] = None if args.max_per_hour == NO_LIMIT else args.max_per_hour
     return policy
+
+
+NO_LIMIT = "none"
+
+
+def _limit(text: str, parse):  # noqa: ANN001, ANN202
+    """A limit from the command line; "none" means no limit."""
+    return None if str(text).strip().lower() in ("none", "no-limit", "unlimited") else parse(text)
+
+
+def _per_hour(text: str):  # noqa: ANN202
+    t = str(text).strip().lower()
+    if t in ("none", "no-limit", "unlimited"):
+        return NO_LIMIT
+    try:
+        return int(t)
+    except ValueError:
+        raise argparse.ArgumentTypeError("a whole number, or none for no limit") from None
 
 
 def cmd_token(args: argparse.Namespace) -> int:
@@ -367,7 +393,9 @@ def cmd_token(args: argparse.Namespace) -> int:
             print(f"{t['id']}  {t['name']:<20} {names.get(t['project_id'], '-'):<20} {state:<8} "
                   f"expires {_ts(t['expires_at'])}  last used {_ts(t['last_used_at'])} {t['last_ip'] or ''}"
                   f"  from {', '.join(t.get('allowed_ips') or ['any'])}  approval {describe(t.get('approval'))}"
-                  + (f" ({t['approvals_this_hour']}/{t['approval']['max_per_hour']} this hour)" if t.get("approval") else "")
+                  + ((f" ({t['approvals_this_hour']} this hour, no hourly limit)" if t["approval"].get("max_per_hour") is None
+                      else f" ({t['approvals_this_hour']}/{t['approval']['max_per_hour']} this hour)")
+                     if t.get("approval") else "")
                   + f"  actions {describe_actions(t.get('actions'))}")
     elif args.action == "set-ips":
         if bool(args.allow_ip) == args.any:
@@ -389,10 +417,10 @@ def cmd_token(args: argparse.Namespace) -> int:
                 if args.channel:
                     policy["channels"] = args.channel
                 if args.action_timeout:
-                    policy["timeout"] = parse_duration(args.action_timeout)
+                    policy["timeout"] = _limit(args.action_timeout, parse_duration)
                 for key in ("max_pending", "max_per_hour"):
                     if getattr(args, key) is not None:
-                        policy[key] = getattr(args, key)
+                        policy[key] = None if getattr(args, key) == NO_LIMIT else getattr(args, key)
             except ValueError as e:
                 _die(str(e))
         policy = c.set_token_actions(args.id, policy)
@@ -473,9 +501,9 @@ def _approval_args(x: argparse.ArgumentParser) -> None:
     x.add_argument("--session-ttl", metavar="DURATION", help="how long an approved session lasts, e.g. 8h (default 8h)")
     x.add_argument("--channel", action="append", choices=CHANNELS,
                    help="where approval requests go (repeatable; default admin_ui)")
-    x.add_argument("--approval-timeout", metavar="DURATION", help="how long a request waits, e.g. 120s (default 120s)")
+    x.add_argument("--approval-timeout", metavar="DURATION", help="how long a request waits, e.g. 120s (default 120s; none: no limit)")
     x.add_argument("--max-pending", type=int, help="outstanding requests allowed per token (default 1)")
-    x.add_argument("--max-per-hour", type=int, help="requests allowed per token per hour (default 6)")
+    x.add_argument("--max-per-hour", type=_per_hour, help="requests allowed per token per hour (default 6; none: no limit)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -484,6 +512,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--server", help="server URL (default: $SW_SERVER_URL)")
     p.add_argument("--token-file", help="machine token file (default: $SW_ACCESS_TOKEN_FILE)")
     p.add_argument("--token-name", help="the token's name in SW_Tokens.json (default: $SW_TOKEN_NAME)")
+    p.add_argument("--token-id", help="the token's id in SW_Tokens.json (default: $SW_TOKEN_ID)")
     p.add_argument("--admin-file", help="admin credential file")
     p.add_argument("--ca-bundle", help="custom CA bundle for TLS verification")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -540,9 +569,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="first match wins: gmail.send=each, gmail.read.*=allow, gmail.label=window:30m, *=deny "
                         "(repeatable; anything unmatched asks every time)")
     x.add_argument("--channel", action="append", choices=CHANNELS, help="where action requests go (default admin_ui)")
-    x.add_argument("--action-timeout", metavar="DURATION", help="how long a request waits for a person (default 1h)")
+    x.add_argument("--action-timeout", metavar="DURATION", help="how long a request waits for a person (default 1h; none: no limit)")
     x.add_argument("--max-pending", type=int, help="outstanding action requests allowed (default 5)")
-    x.add_argument("--max-per-hour", type=int, help="action requests allowed per hour (default 60)")
+    x.add_argument("--max-per-hour", type=_per_hour, help="action requests allowed per hour (default 60; none: no limit)")
     x.add_argument("--default", action="store_true", help="back to the defaults: ask for every action")
     x = tos.add_parser("reset-approval-limits",
                        help="let a token ask for approval again now (restarts its hourly limit, cancels pending)")

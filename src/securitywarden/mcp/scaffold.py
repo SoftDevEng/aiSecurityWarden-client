@@ -98,7 +98,7 @@ The guide to writing connectors: `sw-mcp guide` (AGENTS.md says how to use it wi
    Connectors > Upload, make it available to the project and tick it for the token. Or install this package where the agent runs `sw-mcp`
    (`pip install .`) and add `--connector __NAME__` to the arguments below.
 3. MCP server settings: command `sw-mcp`, arguments `serve`, environment `SW_SERVER_URL` and
-   `SW_TOKEN_NAME` (the token's name on the website). Give the agent the token's setup code.
+   `SW_TOKEN_ID` + `SW_TOKEN_NAME` (shown when you create the token). Give the agent the token's setup code.
 4. Try one tool by hand: `sw-mcp call __NAME___<tool> name=value ...`
 '''
 

@@ -7,6 +7,11 @@ A policy is a small JSON object stored on the token row (NULL = no approval need
 
 Parsing is strict, like :mod:`securitywarden.ipallow`: unknown keys, unknown channels and
 out-of-range numbers are rejected rather than ignored or clamped.
+
+``timeout`` and ``max_per_hour`` may be ``null``: **no limit** (the owner unticked the limit). An unanswered request
+then stays open until a person answers, up to the server's housekeeping limit (:data:`OPEN_REQUEST_MAX`), and the
+hourly count isn't checked. ``max_pending`` is always a number: it is what keeps a looping agent from flooding the
+person with prompts.
 """
 
 from __future__ import annotations
@@ -19,6 +24,32 @@ CHANNELS = ("admin_ui", "push:ntfy", "push:telegram", "push:discord")
 PUSH_CHANNELS = tuple(c for c in CHANNELS if c.startswith("push:"))
 
 MAX_SESSION_TTL = 7 * 86400  # hard ceiling; servers may lower it (SW_MAX_SESSION_TTL)
+NO_LIMIT_FIELDS = ("timeout", "max_per_hour")   # null = no limit
+OPEN_REQUEST_MAX = 30 * 86400  # a request with no time limit is closed after this long unanswered (housekeeping)
+
+
+def request_timeout(policy: Mapping[str, Any]) -> int:
+    """How long a request waits for a person, in seconds (no limit: :data:`OPEN_REQUEST_MAX`)."""
+    t = policy.get("timeout")
+    return OPEN_REQUEST_MAX if t is None else int(t)
+
+
+def over_hourly_limit(policy: Mapping[str, Any], count: int) -> bool:
+    limit = policy.get("max_per_hour")
+    return limit is not None and count >= limit
+
+
+def _check_numbers(out: dict[str, Any], ranges: Mapping[str, tuple[int, int]]) -> None:
+    for key, (lo, hi) in ranges.items():
+        v = out[key]
+        if v is None and key in NO_LIMIT_FIELDS:
+            continue
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError(f"{key} must be a whole number")
+        if not lo <= v <= hi:
+            raise ValueError(f"{key} must be between {lo} and {hi}")
+    if out["max_per_hour"] is not None and out["max_pending"] > out["max_per_hour"]:
+        raise ValueError("max_pending cannot exceed max_per_hour")
 
 DEFAULTS: dict[str, Any] = {
     "mode": "session",
@@ -83,14 +114,7 @@ def normalize_policy(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
             seen.append(ch)
     out["channels"] = seen
 
-    for key, (lo, hi) in RANGES.items():
-        v = out[key]
-        if isinstance(v, bool) or not isinstance(v, int):
-            raise ValueError(f"{key} must be a whole number")
-        if not lo <= v <= hi:
-            raise ValueError(f"{key} must be between {lo} and {hi}")
-    if out["max_pending"] > out["max_per_hour"]:
-        raise ValueError("max_pending cannot exceed max_per_hour")
+    _check_numbers(out, RANGES)
     return out
 
 
@@ -171,14 +195,7 @@ def normalize_action_policy(value: Mapping[str, Any] | None) -> dict[str, Any] |
             seen.append(ch)
     out["channels"] = seen
 
-    for key, (lo, hi) in ACTION_RANGES.items():
-        v = out[key]
-        if isinstance(v, bool) or not isinstance(v, int):
-            raise ValueError(f"{key} must be a whole number")
-        if not lo <= v <= hi:
-            raise ValueError(f"{key} must be between {lo} and {hi}")
-    if out["max_pending"] > out["max_per_hour"]:
-        raise ValueError("max_pending cannot exceed max_per_hour")
+    _check_numbers(out, ACTION_RANGES)
 
     rules = out["rules"]
     if not isinstance(rules, (list, tuple)):

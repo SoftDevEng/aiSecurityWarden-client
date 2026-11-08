@@ -46,6 +46,11 @@
     120
    ]
   },
+  "no_limit_fields": [
+   "timeout",
+   "max_per_hour"
+  ],
+  "open_request_max": 2592000,
   "cases": [
    {
     "input": null,
@@ -237,6 +242,77 @@
    },
    {
     "input": "session",
+    "error": true
+   },
+   {
+    "input": {
+     "timeout": null
+    },
+    "output": {
+     "mode": "session",
+     "session_ttl": 28800,
+     "channels": [
+      "admin_ui"
+     ],
+     "timeout": null,
+     "max_pending": 1,
+     "max_per_hour": 6
+    }
+   },
+   {
+    "input": {
+     "max_per_hour": null,
+     "max_pending": 5
+    },
+    "output": {
+     "mode": "session",
+     "session_ttl": 28800,
+     "channels": [
+      "admin_ui"
+     ],
+     "timeout": 120,
+     "max_pending": 5,
+     "max_per_hour": null
+    }
+   },
+   {
+    "input": {
+     "timeout": null,
+     "max_per_hour": null
+    },
+    "output": {
+     "mode": "session",
+     "session_ttl": 28800,
+     "channels": [
+      "admin_ui"
+     ],
+     "timeout": null,
+     "max_pending": 1,
+     "max_per_hour": null
+    }
+   },
+   {
+    "input": {
+     "max_pending": null
+    },
+    "error": true
+   },
+   {
+    "input": {
+     "session_ttl": null
+    },
+    "error": true
+   },
+   {
+    "input": {
+     "mode": null
+    },
+    "error": true
+   },
+   {
+    "input": {
+     "timeout": "none"
+    },
     "error": true
    }
   ],
@@ -1142,8 +1218,30 @@
    {
     "max_pending": 9,
     "max_per_hour": 3
+   },
+   {
+    "max_pending": null
+   },
+   {
+    "timeout": "none"
    }
-  ]
+  ],
+  "no_limit": {
+   "input": {
+    "timeout": null,
+    "max_per_hour": null,
+    "max_pending": 50
+   },
+   "output": {
+    "channels": [
+     "admin_ui"
+    ],
+    "timeout": null,
+    "max_pending": 50,
+    "max_per_hour": null,
+    "rules": []
+   }
+  }
  },
  "scopes": {
   "project_key_hex": "340b03c8834f2d47dd75bc342e128c74c390224c0f5f1c485f89cd0220b7f4d6",

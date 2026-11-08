@@ -125,7 +125,7 @@ swctl admin token create hermes-webull --name jarvis --expires-days 180
 ### 2. Machine
 
 ```bash
-export SW_SERVER_URL=https://vault.example.com SW_TOKEN_NAME=jarvis
+export SW_SERVER_URL=https://vault.example.com SW_TOKEN_ID=<token id> SW_TOKEN_NAME=jarvis
 swctl setup                       # paste the one-time setup code the website (or --setup-code) shows
 
 swctl export                      # KEY=VALUE lines

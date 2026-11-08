@@ -85,19 +85,24 @@ def setup_from_code(server_url: str, code: str, token_file: str, *, replace: boo
 
 
 def setup_into_store(server_url: str, code: str, store: "TokenStore", name: str | None = None, *,
-                     replace: bool = False, http: httpx.Client | None = None,
+                     token_id: str | None = None, replace: bool = False, http: httpx.Client | None = None,
                      verify: bool | str = True) -> tuple[Credential, str]:
-    """Collect the token behind ``code`` into SW_Tokens.json. With ``name`` (the token this program is set up
-    for), a code for another token is refused before it is used up. Returns (credential, the name stored)."""
+    """Collect the token behind ``code`` into SW_Tokens.json (keyed by token id). With ``name`` (the token this
+    program is set up for), a code for another token is refused before it is used up. A stored token with the same
+    name and server is replaced only with ``replace`` (the caller found it rejected, i.e. revoked); settings that
+    name its id then follow the new one. Returns (credential, the name stored)."""
     from .tokens import check_name
     if name:
         name = check_name(name)
-        if store.entry(name) is not None and not replace:
-            raise SecurityWardenError(f"{store.path} already holds a token called {name!r}")
+    current = store.pick(name, token_id=token_id, server=server_url) if (name or token_id) else None
+    if current is not None and not replace:
+        raise SecurityWardenError(f"{store.path} already holds the token {store.entry(current)['name']!r} for this "
+                                  "program (revoke it on the website first to replace it)")
     cred, info = redeem_setup_code_info(server_url, code, name=name, http=http, verify=verify)
     final = name or info.get("name") or cred.id
-    if not name and store.entry(final) is not None and not replace:
-        raise SecurityWardenError(f"{store.path} already holds a token called {final!r}; the code is used up. "
-                                  "Revoke that token on the website if it's old, make a new code, and try again")
-    store.put(final, cred, server=server_url, project=info.get("project"), replace=replace)
+    try:
+        store.put(cred, name=final, server=server_url, project=info.get("project"), account=info.get("account"),
+                  replace=replace)
+    except SecurityWardenError as e:
+        raise SecurityWardenError(f"{e}; the code is used up: make a new one once that's sorted out") from None
     return cred, final
