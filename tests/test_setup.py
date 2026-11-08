@@ -46,21 +46,27 @@ def test_setup_vectors():
 # -- storing and redeeming -------------------------------------------------------------------
 
 class FakeSetupServer:
+    """The server's setup-code endpoint, with its checks: name, token_id, and replaces (same name and account)."""
+
     def __init__(self):
         self.codes = {}        # setup id -> blob
+        self.tokens = {}       # token id -> (name, account): every token it has seen, revoked ones included
 
     def add(self, cred, name=None, project=None, account=None):
         secret = crypto.new_setup_secret()
         sid, blob = crypto.encrypt_for_setup(secret, cred)
-        self.codes[sid] = (blob, name, project, account)
+        self.codes[sid] = (blob, name, project, account, cred.id)
+        self.tokens[cred.id] = (name, account)
         return crypto.format_setup_code(secret)
 
     def __call__(self, req: httpx.Request) -> httpx.Response:
         sid = req.url.path.rsplit("/", 1)[-1]
         if req.method == "POST" and req.url.path.startswith("/v1/setup/") and sid in self.codes:
-            blob, name, project, account = self.codes[sid]
-            want = req.url.params.get("name")
-            if want is not None and name is not None and want != name:      # refused, not used up
+            blob, name, project, account, tid = self.codes[sid]
+            want, want_id, replaces = (req.url.params.get(k) for k in ("name", "token_id", "replaces"))
+            wrong = (want is not None and name is not None and want != name) or (want_id is not None and want_id != tid) \
+                or (replaces is not None and self.tokens.get(replaces) != (name, account))
+            if wrong:                                                       # refused, not used up
                 return httpx.Response(409, json={"detail": f"setup_code_for_another_token: {name}"})
             del self.codes[sid]
             return httpx.Response(200, json={"blob": blob, "name": name, "project": project, "account": account})
@@ -211,8 +217,8 @@ def test_swctl_and_sw_mcp_setup_commands(tmp_path, monkeypatch, capsys, setup_se
     import securitywarden.client.setup as setup_mod
     from securitywarden.client import cli as swctl
     from securitywarden.mcp import cli as swmcp
-    real = setup_mod.redeem_setup_code
-    monkeypatch.setattr(setup_mod, "redeem_setup_code", lambda url, code, **kw: real(url, code, http=http))
+    real = setup_mod.redeem_setup_code_info
+    monkeypatch.setattr(setup_mod, "redeem_setup_code_info", lambda url, code, **kw: real(url, code, **{**kw, "http": http}))
     for k in ("SW_ACCESS_TOKEN_FILE", "SW_ACCESS_TOKEN", "SW_SERVER_URL", "SW_MCP_CONFIG"):
         monkeypatch.delenv(k, raising=False)
 
@@ -231,3 +237,19 @@ def test_swctl_and_sw_mcp_setup_commands(tmp_path, monkeypatch, capsys, setup_se
                 "--replace", "--connector", "gmail"])
     err = capsys.readouterr().err
     assert path.read_text().strip() == str(cred2) and "serve --connector gmail" in err
+
+
+def test_replacing_a_token_file_only_takes_a_code_for_the_same_token(tmp_path, http, setup_server):
+    """An older MCP entry with a token file of its own must not grab a code meant for another program."""
+    from securitywarden.client import WrongTokenCode
+    path = str(tmp_path / "gmail-token")
+    old = crypto.new_credential(crypto.KIND_MACHINE)
+    setup_from_code("https://vault.example.com", setup_server.add(old, name="gmail-brian"), path, http=http)
+    other = setup_server.add(crypto.new_credential(crypto.KIND_MACHINE), name="Jarvis Gmail")
+    with pytest.raises(WrongTokenCode, match="'Jarvis Gmail'") as e:
+        setup_from_code("https://vault.example.com", other, path, replace=True, http=http)
+    assert e.value.other == "Jarvis Gmail" and open(path).read().strip() == str(old) and len(setup_server.codes) == 1
+    new = crypto.new_credential(crypto.KIND_MACHINE)
+    got, _ = setup_from_code("https://vault.example.com", setup_server.add(new, name="gmail-brian"), path,
+                             replace=True, http=http)
+    assert got == new and open(path).read().strip() == str(new)

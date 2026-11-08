@@ -4,6 +4,11 @@ Machine use (e.g. as a Hermes Agent command helper)::
 
     SW_SERVER_URL=https://vault.example.com SW_ACCESS_TOKEN_FILE=~/.config/sw/token swctl export
 
+This machine's stored tokens (never their secrets), and moving an older token file into SW_Tokens.json::
+
+    swctl tokens list
+    swctl --server https://vault.example.com tokens import --file ~/.config/securitywarden/gmail-token --name jarvis-gmail
+
 Admin use::
 
     swctl admin project create hermes-webull
@@ -270,6 +275,51 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 
 
+def cmd_tokens(args: argparse.Namespace) -> int:
+    """The tokens in SW_Tokens.json on this machine (never their secrets), and moving a token file of its own
+    (SW_ACCESS_TOKEN_FILE, from older setups) into it."""
+    import time
+    from ..crypto import CryptoError, parse_credential
+    from .tokens import TokenStore
+    store = TokenStore()
+    if args.action == "list":
+        try:
+            rows = store.entries()
+        except SecurityWardenError as e:
+            _die(str(e))
+        if not rows:
+            print(f"no tokens in {store.path}")
+        for e in rows:
+            when = time.strftime("%Y-%m-%d", time.localtime(e["saved_at"])) if e.get("saved_at") else "-"
+            print(f"{e['id']}  {e['name']:<24} {e.get('project') or '-':<16} {e.get('server') or '-'}  saved {when}")
+        return 0
+    # import
+    path = args.file
+    try:
+        with open(os.path.expanduser(path), encoding="utf-8") as f:
+            cred = parse_credential(f.read())
+    except FileNotFoundError:
+        _die(f"no token file at {path}")
+    except (OSError, CryptoError, ValueError) as e:
+        _die(f"{path} doesn't hold a machine token ({e})")
+    if cred.kind != "m":
+        _die(f"{path} holds an admin credential, not a machine token; it doesn't belong in SW_Tokens.json")
+    server = _server(args)
+    try:
+        if store.entry(cred.id) is not None:
+            print(f"{store.path} already holds this token ({store.entry(cred.id)['name']!r}); nothing to do.",
+                  file=sys.stderr)
+        else:
+            store.put(cred, name=args.name, server=server)
+            print(f"Token {args.name!r} ({cred.id}) copied into {store.path} (readable by you only).", file=sys.stderr)
+    except SecurityWardenError as e:
+        _die(str(e))
+    print(f"\nIn the program's MCP settings, replace SW_ACCESS_TOKEN_FILE with:\n  SW_TOKEN_ID={cred.id}\n"
+          f"  SW_TOKEN_NAME={args.name}\nand use the arguments: serve (without --connector, if the website ticks the "
+          f"connectors for this token). Once it works, delete {path}.", file=sys.stderr)
+    return 0
+
+
 def cmd_project(args: argparse.Namespace) -> int:
     c = _admin_client(args)
     if args.action == "create":
@@ -529,6 +579,14 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--replace", action="store_true", help="replace a token that is already stored")
     st.add_argument("--code-stdin", action="store_true", help="read the code from stdin instead of asking")
     st.set_defaults(func=cmd_setup)
+
+    tk = sub.add_parser("tokens", help="the tokens stored on this machine (SW_Tokens.json)")
+    tks = tk.add_subparsers(dest="action", required=True)
+    tks.add_parser("list", help="list them (ids, names, servers; never the secrets)")
+    x = tks.add_parser("import", help="move a token file of its own (SW_ACCESS_TOKEN_FILE) into SW_Tokens.json")
+    x.add_argument("--file", required=True, help="the token file")
+    x.add_argument("--name", required=True, help="the token's name on the website")
+    tk.set_defaults(func=cmd_tokens)
 
     a = sub.add_parser("admin", help="administer projects, secrets and tokens").add_subparsers(
         dest="area", required=True)

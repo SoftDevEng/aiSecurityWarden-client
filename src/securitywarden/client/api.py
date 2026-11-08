@@ -698,11 +698,21 @@ def redeem_setup_code(server_url: str, code: str, *, http: httpx.Client | None =
     return redeem_setup_code_info(server_url, code, http=http, verify=verify, timeout=timeout)[0]
 
 
-def redeem_setup_code_info(server_url: str, code: str, *, name: str | None = None, http: httpx.Client | None = None,
-                           verify: bool | str = True, timeout: float = 30.0) -> tuple[Credential, dict[str, Any]]:
+class WrongTokenCode(SecurityWardenError):
+    """The setup code is for another token than this program's; it was NOT used up. ``other``: its token's name."""
+
+    def __init__(self, message: str, other: str):
+        super().__init__(message)
+        self.other = other
+
+
+def redeem_setup_code_info(server_url: str, code: str, *, name: str | None = None, token_id: str | None = None,
+                           replaces: str | None = None, http: httpx.Client | None = None, verify: bool | str = True,
+                           timeout: float = 30.0) -> tuple[Credential, dict[str, Any]]:
     """(credential, {"name", "project", "account"}) behind a one-time setup code ("account": an opaque tag of the
-    owning account, from servers 0.6.0.dev16 on). With ``name``, a code for a token with
-    another name is refused by the server before it is used up."""
+    owning account, from servers 0.6.0.dev16 on). What this program is set up for: ``name``, ``token_id`` and/or
+    ``replaces`` (the id of the revoked token being replaced: same name and owner required). A code for another
+    token is refused by the server before it is used up (:class:`WrongTokenCode`)."""
     try:
         secret = crypto.parse_setup_code(code)
     except CryptoError as e:
@@ -711,7 +721,8 @@ def redeem_setup_code_info(server_url: str, code: str, *, name: str | None = Non
     own = http is None
     client = http or httpx.Client(timeout=timeout, verify=verify)
     try:
-        r = client.post(f"{base}/v1/setup/{crypto.setup_id(secret)}", params={"name": name} if name else None)
+        params = {k: v for k, v in (("name", name), ("token_id", token_id), ("replaces", replaces)) if v}
+        r = client.post(f"{base}/v1/setup/{crypto.setup_id(secret)}", params=params or None)
     except httpx.HTTPError as e:
         raise SecurityWardenError(f"couldn't reach {base} ({type(e).__name__})") from None
     finally:
@@ -719,8 +730,9 @@ def redeem_setup_code_info(server_url: str, code: str, *, name: str | None = Non
             client.close()
     if r.status_code == 409 and _detail(r).startswith("setup_code_for_another_token"):
         other = _detail(r).partition(":")[2].strip()
-        raise SecurityWardenError(f"that setup code is for the token {other!r}, but this program is set up for "
-                                  f"{name!r}; the code still works where {other!r} belongs")
+        mine = repr(name) if name else "another token"
+        raise WrongTokenCode(f"that setup code is for the token {other!r}, but this program is set up for {mine}; "
+                             f"the code wasn't used and still works where {other!r} belongs", other)
     if r.status_code == 404:
         raise SecurityWardenError("that setup code is unknown, already used or expired: make a new one")
     if r.status_code == 403:
@@ -736,9 +748,10 @@ def redeem_setup_code_info(server_url: str, code: str, *, name: str | None = Non
         raise SecurityWardenError("the server's answer didn't decrypt with that code") from None
     info = {k: data.get(k) if isinstance(data.get(k), str) and len(data.get(k)) <= 200 else None
             for k in ("name", "project", "account")}
-    if name and info["name"] and info["name"] != name:     # a server that ignored the name check
-        raise SecurityWardenError(f"that setup code was for the token {info['name']!r}, not {name!r}; nothing was "
-                                  "stored (the code is used up: make a new one)")
+    if (name and info["name"] and info["name"] != name) or (token_id and cred.id != token_id and not name):
+        # a server that ignored the check
+        raise SecurityWardenError(f"that setup code was for the token {info['name']!r}, not {name or token_id!r}; "
+                                  "nothing was stored (the code is used up: make a new one)")
     return cred, info
 
 

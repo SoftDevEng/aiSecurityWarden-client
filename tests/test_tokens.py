@@ -298,3 +298,63 @@ def test_gmail_login_reads_the_oauth_client_with_a_named_token(tmp_path, monkeyp
     assert gmail._oauth_client(args) == ("typed-id", "typed-secret")               # several, none named: asks
     monkeypatch.setenv("SW_TOKEN_NAME", "keith-gmail")
     assert gmail._oauth_client(args) == ("cid", "cs")
+
+
+def test_two_mcp_servers_each_take_only_their_own_code(tmp_path, http, setup_server):
+    """The jarvis case: an older entry with a token file of its own (its token revoked) and a new entry for
+    'Jarvis Gmail' in SW_Tokens.json. Each setup tool says which token it's for, and the old one refuses the new
+    token's code without using it up, telling the agent to use the other tool."""
+    from securitywarden.client.setup import setup_from_code
+    revoked = m()
+    old_file = str(tmp_path / "gmail-token-old")
+    setup_from_code(URL, setup_server.add(revoked, name="gmail-old"), old_file, http=http)
+
+    class Rejected(FakeServer):
+        def check_token(self):
+            from securitywarden.client import TokenRejected
+            raise TokenRejected("revoked")
+    old = Hub(None, [Notes], setup=SetupTarget(URL, old_file, lambda cred: Rejected({"notes.read.note": "allow"}),
+                                                  http=http), log=lambda msg: None)
+    new, store, made = _hub(tmp_path, http, name="Jarvis Gmail")
+    d_old = next(t for t in old.list_tools() if t["name"] == "securitywarden_setup")["description"]
+    d_new = next(t for t in new.list_tools() if t["name"] == "securitywarden_setup")["description"]
+    assert "gmail-token-old" in d_old and revoked.id in d_old and "'Jarvis Gmail'" in d_new
+
+    cred = m()
+    code = setup_server.add(cred, name="Jarvis Gmail")
+    r = old.call("securitywarden_setup", {"code": code})
+    assert r.is_error and "NOT used up" in r.text and "'Jarvis Gmail'" in r.text
+    assert open(old_file).read().strip() == str(revoked) and len(setup_server.codes) == 1
+    ok = new.call("securitywarden_setup", {"code": code})
+    assert not ok.is_error and "'Jarvis Gmail'" in ok.text and store.credential(cred.id) == cred
+
+
+def test_set_up_by_id_only_refuses_another_tokens_code(tmp_path, http, setup_server):
+    mine = m()
+    hub, store, made = _hub(tmp_path, http, token_id=mine.id)
+    r = hub.call("securitywarden_setup", {"code": setup_server.add(m(), name="someone-else")})
+    assert r.is_error and "NOT used up" in r.text and len(setup_server.codes) == 1
+    ok = hub.call("securitywarden_setup", {"code": setup_server.add(mine, name="mine")})
+    assert not ok.is_error and store.credential(mine.id) == mine
+
+
+def test_swctl_tokens_list_and_import(tmp_path, monkeypatch, capsys):
+    from securitywarden.client import cli as swctl
+    monkeypatch.setenv("SW_TOKENS_FILE", str(tmp_path / FILE_NAME))
+    monkeypatch.delenv("SW_SERVER_URL", raising=False)
+    old = m()
+    path = tmp_path / "gmail-token"
+    path.write_text(str(old) + "\n")
+    swctl.main(["--server", URL, "tokens", "import", "--file", str(path), "--name", "jarvis-gmail"])
+    err = capsys.readouterr().err
+    assert f"SW_TOKEN_ID={old.id}" in err and "SW_TOKEN_NAME=jarvis-gmail" in err and str(old) not in err
+    assert TokenStore().credential(old.id) == old and path.exists()            # the old file is left for the user
+    swctl.main(["--server", URL, "tokens", "import", "--file", str(path), "--name", "jarvis-gmail"])
+    assert "nothing to do" in capsys.readouterr().err
+    swctl.main(["tokens", "list"])
+    out = capsys.readouterr().out
+    assert old.id in out and "jarvis-gmail" in out and str(old) not in out and old.secret not in out
+    admin = tmp_path / "admin"
+    admin.write_text(str(crypto.new_credential(crypto.KIND_ADMIN)))
+    with pytest.raises(SystemExit):
+        swctl.main(["--server", URL, "tokens", "import", "--file", str(admin), "--name", "x"])
