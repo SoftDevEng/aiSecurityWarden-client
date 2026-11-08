@@ -235,20 +235,25 @@ class SetupTarget:
     http: Any = None                    # tests
     store: Any = None                   # client.tokens.TokenStore
     token_name: str | None = None
+    token_id: str | None = None         # SW_TOKEN_ID: what the store goes by (the name is the fallback)
+
+    def _pick(self) -> str | None:
+        return self.store.pick(self.token_name, token_id=self.token_id, server=self.server_url)
 
     def has_token(self) -> bool:
-        """Raises SecurityWardenError when SW_Tokens.json holds several tokens and none is named."""
+        """Raises SecurityWardenError when SW_Tokens.json holds several matching tokens and none is named."""
         if self.store is not None:
-            name = self.store.pick(self.token_name)
-            return name is not None and self.store.entry(name) is not None
+            return self._pick() is not None
         from ..client.setup import token_file_exists
         return bool(self.token_file) and token_file_exists(self.token_file)
 
     def load(self) -> Any:
         if self.store is not None:
-            name = self.store.pick(self.token_name)
-            self.token_name = name
-            return self.store.credential(name)
+            tid = self._pick()
+            if tid is None:
+                raise SecurityWardenError(f"no token for this program in {self.store.path} yet")
+            self.token_name = self.store.entry(tid)["name"]
+            return self.store.credential(tid)
         import os
         from ..crypto import parse_credential
         with open(os.path.expanduser(self.token_file), encoding="utf-8") as f:
@@ -257,12 +262,9 @@ class SetupTarget:
     def install(self, code: str, *, replace: bool) -> Any:
         from ..client.setup import setup_from_code, setup_into_store
         if self.store is not None:
-            try:
-                name = self.store.pick(self.token_name)
-            except SecurityWardenError:
-                name = None             # several stored, none named: store under the code's own token name
-            cred, self.token_name = setup_into_store(self.server_url, code, self.store, name, replace=replace,
-                                                     http=self.http, verify=self.verify)
+            cred, self.token_name = setup_into_store(self.server_url, code, self.store, self.token_name,
+                                                     token_id=self.token_id, replace=replace, http=self.http,
+                                                     verify=self.verify)
             return cred
         cred, _where = setup_from_code(self.server_url, code, self.token_file, replace=replace, http=self.http,
                                        verify=self.verify)

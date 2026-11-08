@@ -259,7 +259,8 @@ than one they have already run.
    (Connectors); a token for the agent with the connector ticked and the suggested rules (token → Manage). Or
    install the package where the agent runs and name it in the MCP settings (`--connector notes`).
 2. The agent's MCP settings: command `sw-mcp`, arguments `serve`, environment `SW_SERVER_URL` and
-   `SW_TOKEN_NAME` (the token's name; it's kept in SW_Tokens.json once set up).
+   `SW_TOKEN_ID` and `SW_TOKEN_NAME` (the website shows both when you create the token; it's kept in
+   SW_Tokens.json once set up).
 3. Give the agent the token's setup code: "Set up SecurityWarden with code SWS1-...".
 4. Try a tool by hand: `sw-mcp call notes_search query=shopping`.
 

@@ -97,10 +97,14 @@ def approval_policy(mode_label: str, session_hours: str, channels: list[str], ti
         policy["session_ttl"] = max(60, int(hours * 3600))
     for key, text, label in (("timeout", timeout, "Wait for a decision"), ("max_per_hour", per_hour, "Requests per hour"),
                              ("max_pending", pending, "Pending at once")):
+        t = str(text).strip()
+        if key != "max_pending" and t.lower() in ("", "none", "no limit"):
+            policy[key] = None          # no limit (blank in the dialog)
+            continue
         try:
-            policy[key] = int(str(text).strip())
+            policy[key] = int(t)
         except ValueError:
-            raise ValueError(f"{label} must be a whole number.") from None
+            raise ValueError(f"{label} must be a whole number (blank: no limit).") from None
     return normalize_policy(policy)
 
 
@@ -109,7 +113,10 @@ def approval_summary(t: dict[str, Any]) -> str:
     p = t.get("approval")
     if not p:
         return "none"
-    return f"{describe(p)} · {t.get('approvals_this_hour', 0)}/{p['max_per_hour']} this hour"
+    n = t.get("approvals_this_hour", 0)
+    if p.get("max_per_hour") is None:
+        return f"{describe(p)} · {n} this hour (no hourly limit)"
+    return f"{describe(p)} · {n}/{p['max_per_hour']} this hour"
 
 
 def fmt_time(v: int | None) -> str:
@@ -775,11 +782,11 @@ class _ApprovalFields:
         r = 2 + len(CHANNELS)
         ttk.Label(box, text="Push channels must be set up on the server first.", foreground="#666").grid(
             row=r, column=0, columnspan=3, sticky="w", pady=(4, PAD))
-        self.timeout = tk.StringVar(value=str(p["timeout"]))
-        self.per_hour = tk.StringVar(value=str(p["max_per_hour"]))
+        self.timeout = tk.StringVar(value="" if p["timeout"] is None else str(p["timeout"]))
+        self.per_hour = tk.StringVar(value="" if p["max_per_hour"] is None else str(p["max_per_hour"]))
         self.pending = tk.StringVar(value=str(p["max_pending"]))
-        for i, (label, var, hint) in enumerate((("Wait for a decision (seconds)", self.timeout, "15-600"),
-                                                ("Requests per hour", self.per_hour, "1-120"),
+        for i, (label, var, hint) in enumerate((("Wait for a decision (seconds)", self.timeout, "15-600, blank: no limit"),
+                                                ("Requests per hour", self.per_hour, "1-120, blank: no limit"),
                                                 ("Pending at once", self.pending, "1-5"))):
             ttk.Label(box, text=label).grid(row=r + 1 + i, column=0, sticky="w")
             ttk.Entry(box, textvariable=var, width=6).grid(row=r + 1 + i, column=1, sticky="w", padx=(PAD * 2, 4))

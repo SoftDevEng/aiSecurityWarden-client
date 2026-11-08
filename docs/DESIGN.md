@@ -110,6 +110,13 @@ capped by the server's `SW_MAX_SESSION_TTL` (default 24 h); `timeout` 15 to 600 
 `max_pending` 1 to 5; `max_per_hour` 1 to 120. `approvers` (device signatures) is reserved
 and refused until implemented.
 
+**No limit:** `timeout` and `max_per_hour` may be `null` (the owner unticked the limit), in this policy and in the
+action policy. A request with no time limit stays open until a person answers it, and the server closes it after
+`OPEN_REQUEST_MAX` (30 days) unanswered, as housekeeping; the `expires_in` it reports is that. With no hourly limit,
+requests aren't counted against an hour. `max_pending` is never `null`: it is what stops a looping agent from
+flooding the person (a new prompt can only come after an open one is answered). A client that waits for a secret
+fetch with no time limit waits until it's answered.
+
 **What it stops:** a stolen token file used from an allowed address (another process on
 the agent box), an agent with shell access running `swctl export` on its own, an attacker
 with a token and a LAN foothold. **What it does not stop:** a compromised server issuing
@@ -238,7 +245,7 @@ as the server-wide settings: secrets are never sent back (last four characters o
 ### Abuse limits and audit
 
 `max_pending` outstanding requests per token and `max_per_hour` requests per token (`429`
-beyond either) prevent prompt flooding. Every request counts toward the hourly limit,
+beyond either; no hourly check when `max_per_hour` is `null`) prevent prompt flooding. Every request counts toward the hourly limit,
 whatever its outcome. An admin can let a token ask again at once with
 `POST /v1/admin/tokens/{id}/approval/reset`: it records `credentials.approval_reset_at`
 (requests from before it stop counting) and cancels the token's pending requests. Approved
@@ -318,7 +325,8 @@ exact name, `prefix.*` (the prefix itself and everything under it) or `*`.
 A `high`-risk action is never `allow` or `window`: such rules are tightened to `each`. Risk only ever
 tightens; a rule is the most an agent can get. No policy (NULL) means: ask for every action, on the
 website (`admin_ui`), timeout 1 hour. Limits: `timeout` 60 s to 24 h (the agent checks back, it doesn't
-block), `max_pending` 1 to 50, `max_per_hour` 1 to 1000. Changing a token's action policy, revoking it
+block), `max_pending` 1 to 50, `max_per_hour` 1 to 1000; `timeout` and `max_per_hour` may be `null` for no
+limit (see "No limit" above). Changing a token's action policy, revoking it
 or resetting its limits ends pending action requests and open windows.
 
 ### Protocol (machine token)
@@ -596,27 +604,39 @@ Ways to redeem: the agent's `securitywarden_setup` tool, `sw-mcp setup`, `swctl 
 **Copy for the agent** copies *"Set up SecurityWarden with code SWS1-…"*, ready to paste into the chat (never with
 a server address: the agent only uses the server in its own settings).
 
-### SW_Tokens.json (tokens on a machine, by name)
+### SW_Tokens.json (tokens on a machine, by token id)
 
-Every machine token on a machine lives in one file only its user can read, keyed by the token's name on the
-website, so every bot's MCP settings look alike except for `SW_TOKEN_NAME`:
+Every machine token on a machine lives in one file only its user can read, **keyed by the token's id**. Each
+program's settings name its token with `SW_TOKEN_ID` (what the software goes by) and `SW_TOKEN_NAME` (the name
+on the website, for people and as a fallback); the website's token set-up shows both.
 
-    {"format": "sw-tokens-1",
-     "tokens": {"jarvis-gmail": {"token": "sw1.m....", "id": "...", "server": "https://...", "project": "Gmail",
-                                 "saved_at": 1793400000}}}
+    {"format": "sw-tokens-2",
+     "tokens": {"<token id>": {"name": "jarvis-gmail", "token": "sw1.m....", "server": "https://...",
+                               "project": "Gmail", "account": "<tag>", "saved_at": 1793400000},
+                "<old id>":   {"name": "jarvis-gmail", "server": "https://...", "account": "<tag>",
+                               "replaced_by": "<token id>", "replaced_at": 1793400000}}}
 
 - Location: `SW_TOKENS_FILE`, else `%APPDATA%\SecurityWarden\SW_Tokens.json` (Windows) or
   `$XDG_CONFIG_HOME/securitywarden/SW_Tokens.json` (default `~/.config/securitywarden`).
-- Which token: `SW_TOKEN_NAME` (or `--token-name`, or `token_name` in the sw-mcp config); without one, the only
-  token in the file. With several and no name, programs refuse to guess.
-- The server allows one **active** token per name and owner (a revoked token's name is free again), so a name
-  identifies one token. Replacing a revoked token touches only its own entry.
+- **Which token:** `SW_TOKEN_ID` (or `--token-id`, or `token_id` in the sw-mcp config), following `replaced_by`;
+  else `SW_TOKEN_NAME` matched with the server (`SW_SERVER_URL`); without either, the only token in the file.
+  Several matches (e.g. the same name from two accounts) is an error asking for `SW_TOKEN_ID`, never a guess.
+- **Accounts:** the server allows one active token per name *per account*, so one machine can hold tokens of the
+  same name from different accounts or servers. Each is its own entry; the setup answer carries `account`, an
+  opaque tag of the owning account (`base64url(SHA-256("sw1|account-tag|<owner id>"))[:16 chars]`), never the
+  account id.
+- **Replacing a token:** setup stores a new token with the same name, server and account over a stored one only
+  when the caller found the stored token rejected (revoked or expired). The old entry keeps only `replaced_by` (its
+  secret is removed), so settings that name the old id keep working without an edit.
+- **Older files** (`sw-tokens-1`, keyed by name) are read as before and converted on the next write; the old file
+  is kept as `SW_Tokens.json.v1.bak` (owner-only). Entries without `account` count as the same account.
 - Writes take a lock file (`O_EXCL`; a lock older than 30 s is a leftover and taken over) and replace the file in
   one step, so bots setting up at the same time don't lose each other's entries.
 - `SW_ACCESS_TOKEN_FILE` (a file per token) and `SW_ACCESS_TOKEN` keep working and take precedence.
 - Every process of that user can read every token in the file, as it could read separate files before; one
   user per machine trust boundary, as before.
-- Connector rollback state: `connector-versions/<token name>.json` in the same folder.
+- Connector rollback state: `connector-versions/id-<token id>.json` in the same folder (before 0.6.0.dev19
+  `<token name>.json`, copied over once).
 
 ## Web front end
 

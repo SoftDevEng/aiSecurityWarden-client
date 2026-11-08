@@ -700,7 +700,8 @@ def redeem_setup_code(server_url: str, code: str, *, http: httpx.Client | None =
 
 def redeem_setup_code_info(server_url: str, code: str, *, name: str | None = None, http: httpx.Client | None = None,
                            verify: bool | str = True, timeout: float = 30.0) -> tuple[Credential, dict[str, Any]]:
-    """(credential, {"name", "project"}) behind a one-time setup code. With ``name``, a code for a token with
+    """(credential, {"name", "project", "account"}) behind a one-time setup code ("account": an opaque tag of the
+    owning account, from servers 0.6.0.dev16 on). With ``name``, a code for a token with
     another name is refused by the server before it is used up."""
     try:
         secret = crypto.parse_setup_code(code)
@@ -733,8 +734,8 @@ def redeem_setup_code_info(server_url: str, code: str, *, name: str | None = Non
         cred = crypto.decrypt_from_setup(secret, data["blob"])
     except (CryptoError, KeyError, ValueError):
         raise SecurityWardenError("the server's answer didn't decrypt with that code") from None
-    info = {"name": data.get("name") if isinstance(data.get("name"), str) else None,
-            "project": data.get("project") if isinstance(data.get("project"), str) else None}
+    info = {k: data.get(k) if isinstance(data.get(k), str) and len(data.get(k)) <= 200 else None
+            for k in ("name", "project", "account")}
     if name and info["name"] and info["name"] != name:     # a server that ignored the name check
         raise SecurityWardenError(f"that setup code was for the token {info['name']!r}, not {name!r}; nothing was "
                                   "stored (the code is used up: make a new one)")

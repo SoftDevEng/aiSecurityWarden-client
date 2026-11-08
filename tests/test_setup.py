@@ -49,21 +49,21 @@ class FakeSetupServer:
     def __init__(self):
         self.codes = {}        # setup id -> blob
 
-    def add(self, cred, name=None, project=None):
+    def add(self, cred, name=None, project=None, account=None):
         secret = crypto.new_setup_secret()
         sid, blob = crypto.encrypt_for_setup(secret, cred)
-        self.codes[sid] = (blob, name, project)
+        self.codes[sid] = (blob, name, project, account)
         return crypto.format_setup_code(secret)
 
     def __call__(self, req: httpx.Request) -> httpx.Response:
         sid = req.url.path.rsplit("/", 1)[-1]
         if req.method == "POST" and req.url.path.startswith("/v1/setup/") and sid in self.codes:
-            blob, name, project = self.codes[sid]
+            blob, name, project, account = self.codes[sid]
             want = req.url.params.get("name")
             if want is not None and name is not None and want != name:      # refused, not used up
                 return httpx.Response(409, json={"detail": f"setup_code_for_another_token: {name}"})
             del self.codes[sid]
-            return httpx.Response(200, json={"blob": blob, "name": name, "project": project})
+            return httpx.Response(200, json={"blob": blob, "name": name, "project": project, "account": account})
         return httpx.Response(404, json={"detail": "unknown, used or expired setup code"})
 
 

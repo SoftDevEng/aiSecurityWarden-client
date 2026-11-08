@@ -62,3 +62,35 @@ def test_discord_is_a_push_channel():
     assert "push:discord" in approval.PUSH_CHANNELS
     p = approval.normalize_policy({"channels": ["admin_ui", "push:discord"]})
     assert p["channels"] == ["admin_ui", "push:discord"]
+
+
+def test_no_limit_for_wait_and_hourly_requests():
+    from securitywarden.approval import (OPEN_REQUEST_MAX, normalize_action_policy, over_hourly_limit,
+                                         request_timeout)
+    p = normalize_policy({"timeout": None, "max_per_hour": None, "max_pending": 5})
+    assert p["timeout"] is None and p["max_per_hour"] is None and p["max_pending"] == 5
+    assert request_timeout(p) == OPEN_REQUEST_MAX and not over_hourly_limit(p, 10**6)
+    assert request_timeout(normalize_policy({})) == 120 and over_hourly_limit(normalize_policy({}), 6)
+    a = normalize_action_policy({"timeout": None, "max_per_hour": None, "max_pending": 50})
+    assert request_timeout(a) == OPEN_REQUEST_MAX and not over_hourly_limit(a, 5000)
+    # the flood guard can't be switched off, and other fields can't be null
+    for bad in ({"max_pending": None}, {"session_ttl": None}, {"timeout": "none"}, {"max_per_hour": 0}):
+        with pytest.raises(ValueError):
+            normalize_policy(bad)
+    with pytest.raises(ValueError):
+        normalize_action_policy({"max_pending": None})
+
+
+def test_swctl_and_swadmin_take_no_limit():
+    from securitywarden.client import cli
+    from securitywarden.client.gui import approval_policy, approval_summary
+    args = cli.build_parser().parse_args(["admin", "token", "create", "proj", "--name", "bot", "--approval", "session",
+                                          "--approval-timeout", "none", "--max-per-hour", "none"])
+    pol = cli._policy_from_args(args)
+    assert pol["timeout"] is None and pol["max_per_hour"] is None
+    assert normalize_policy(pol)["max_per_hour"] is None
+    pol = approval_policy("Once per session", "8", ["admin_ui"], timeout="", per_hour="", pending="2")
+    assert pol["timeout"] is None and pol["max_per_hour"] is None and pol["max_pending"] == 2
+    with pytest.raises(ValueError):
+        approval_policy("Once per session", "8", ["admin_ui"], pending="")
+    assert "no hourly limit" in approval_summary({"approval": pol, "approvals_this_hour": 3})

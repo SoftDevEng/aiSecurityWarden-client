@@ -55,12 +55,13 @@ mcp_servers:
     args: ["serve"]
     env:
       SW_SERVER_URL: "https://vault.example.com"
+      SW_TOKEN_ID: "xRSfLsPmlCXH0TRes8Jl3w"        # the token's id (the website's set-up step shows it)
       SW_TOKEN_NAME: "jarvis-gmail"                # the token's name on the website
 ```
 
 The token will be kept in `SW_Tokens.json` (`~/.config/securitywarden/` on Linux, `%APPDATA%\SecurityWarden\` on
-Windows) under that name, next to any other bots' tokens; it doesn't need to exist yet. Every bot's settings look
-like this, apart from the name.
+Windows) under its id, next to any other bots' tokens; it doesn't need to exist yet. Every bot's settings look
+like this, apart from the id and name.
 
 Gmail comes from the website: under **Connectors**, make Gmail available to the project, and tick **Gmail** for
 the token (when creating it, or under **Manage**). Unticking it there removes the tools from the running agent.
@@ -70,7 +71,7 @@ its own, which still works.)
 ### Give it the setup code
 
 On the website, **Copy for the agent** and paste it into the chat (*"Set up SecurityWarden with code SWS1-…"*). The
-agent calls `securitywarden_setup`, which stores the token in `SW_Tokens.json` under its name, readable only by
+agent calls `securitywarden_setup`, which stores the token in `SW_Tokens.json` under its id, readable only by
 your user, and the Gmail tools work; the website's dialog closes by itself once the code is used. A code for
 another token is refused without being used up. Or, in a terminal on the machine:
 `sw-mcp setup --server https://vault.example.com --token-name jarvis-gmail` and paste the code when asked.

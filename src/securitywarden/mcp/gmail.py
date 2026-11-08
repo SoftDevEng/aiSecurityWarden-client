@@ -545,8 +545,9 @@ def _has_token(args: Any) -> bool:
     from ..client.tokens import TokenStore
     try:
         store = TokenStore()
-        name = store.pick(getattr(args, "token_name", None) or os.environ.get("SW_TOKEN_NAME"))
-        return name is not None and store.entry(name) is not None
+        return store.pick(getattr(args, "token_name", None) or os.environ.get("SW_TOKEN_NAME"),
+                          token_id=getattr(args, "token_id", None) or os.environ.get("SW_TOKEN_ID"),
+                          server=getattr(args, "server", None) or os.environ.get("SW_SERVER_URL")) is not None
     except Exception:  # noqa: BLE001 - e.g. several tokens and none named: ask instead
         return False
 
