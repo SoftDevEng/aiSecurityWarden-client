@@ -102,7 +102,7 @@ sw-mcp proxy-init acme --url https://mcp.acme.example/mcp --bearer ACME_TOKEN
 
 `ACME_TOKEN` is the secret's **name** in aiSecurityWarden. To read the tool list now, `sw-mcp` takes its value
 from an environment variable of that name or asks you for it; the value is never written to the file. Then check
-every tool's risk (`high` always asks, whatever the rules say), add summaries and scopes where useful, upload
+every tool's risk (the suggested rules should ask for every `high` one), add summaries and scopes where useful, upload
 `acme.swproxy` on the Connectors page and add the secret to the project.
 
 By hand, a mapping looks like this:

@@ -132,7 +132,7 @@ CONNECTOR = '''"""SecurityWarden connector for __TITLE__.
 Actions and their risk (the token's rules in SecurityWarden decide what asks a person):
 
     __NAME__.read.items    low     list items
-    __NAME__.delete        high    delete an item (always asks)
+    __NAME__.delete        high    delete an item (the suggested rules ask every time)
 
 TODO: replace the example tools and API calls below with __TITLE__'s.
 """

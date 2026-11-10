@@ -424,3 +424,42 @@ def test_no_remembered_list_offers_only_the_built_in_tools(tmp_path):
     hub = Hub(FakeServer(), [], source=WaitingSource([Notes]), tool_cache=lambda: str(tmp_path / "none.json"),
               log=lambda m: None)
     assert {t["name"] for t in hub.list_tools()} == {"check_approval"}
+
+
+def test_the_agent_is_told_when_the_tools_load_after_approval():
+    """No agent call needed: while the session waits, sw-mcp looks again, and once the person approves it sends
+    notifications/tools/list_changed. It only looks while a request it already made is waiting."""
+    import io
+    from securitywarden.mcp.server import StdioServer
+    src = WaitingSource([Notes])
+    client = FakeServer({"notes.read.note": "allow"})
+    hub = Hub(client, [], source=src, log=lambda m: None)
+    srv = StdioServer(hub)
+    srv.initialized = True
+    out = io.BytesIO()
+    assert {t["name"] for t in hub.list_tools()} == {"check_approval"}
+    client._pending_auth = ({"approval_id": "req-1"}, {})       # the client's own waiting request
+    assert hub.waiting()
+    srv.watch_once(out)
+    assert out.getvalue() == b""                                 # still waiting: nothing to say
+    src.pending = False                                          # the person approves
+    srv.watch_once(out)
+    assert json.loads(out.getvalue())["method"] == "notifications/tools/list_changed"
+    assert "notes_read" in {t["name"] for t in hub.list_tools()}
+    assert not hub.waiting()
+    srv.watch_once(out)
+    assert out.getvalue().count(b"list_changed") == 1
+
+
+def test_no_waiting_request_means_no_checks():
+    src = WaitingSource([Notes])
+    client = FakeServer({})
+    hub = Hub(client, [], source=src, log=lambda m: None)
+    calls = []
+    hub.refresh = lambda **kw: calls.append(kw)                  # type: ignore[method-assign]
+    from securitywarden.mcp.server import StdioServer
+    import io
+    srv = StdioServer(hub)
+    srv.initialized = True
+    srv.watch_once(io.BytesIO())                                 # nothing asked yet (or it was denied): no new request
+    assert calls == []

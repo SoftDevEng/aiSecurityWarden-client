@@ -85,7 +85,8 @@ def check_connector(cls: Any) -> list[tuple[str, str]]:
         if not hits:
             warn(f"suggested rule {rule_text!r} matches none of this connector's actions")
         if rule["mode"] in ("allow", "window") and any(actions[a] == "high" for a in hits):
-            warn(f"suggested rule {rule_text!r} covers high-risk actions, which always ask anyway")
+            warn(f"suggested rule {rule_text!r} lets high-risk actions run without asking: suggested rules should "
+                 "ask for those (the user can still loosen them)")
     if specs and not cls.suggested_rules:
         warn("no suggested_rules: give users a sensible starting policy (reads allow, risky actions each)")
     return out

@@ -322,8 +322,10 @@ exact name, `prefix.*` (the prefix itself and everything under it) or `*`.
 | `window` | a person approves once; the same action name is then allowed for `window` seconds (60 to 86400) |
 | `deny` | refused |
 
-A `high`-risk action is never `allow` or `window`: such rules are tightened to `each`. Risk only ever
-tightens; a rule is the most an agent can get. No policy (NULL) means: ask for every action, on the
+The rules decide, whatever an action's risk (0.6.0.dev24; before, high-risk actions were tightened to `each`).
+Risk is what a person sees when choosing rules and approving; connectors' suggested rules ask for every high-risk
+action. One exception: approving an approval proxy's changed tool list (`<name>.tools.approve`) always asks, since it
+checks the rules themselves. A rule is the most an agent can get. No policy (NULL) means: ask for every action, on the
 website (`admin_ui`), timeout 1 hour. Limits: `timeout` 60 s to 24 h (the agent checks back, it doesn't
 block), `max_pending` 1 to 50, `max_per_hour` 1 to 1000; `timeout` and `max_per_hour` may be `null` for no
 limit (see "No limit" above). Changing a token's action policy, revoking it
@@ -426,7 +428,7 @@ revoked: ask the user for a new setup code", and `securitywarden_setup` checks w
 never count as rejected. Only someone signed in to the token's SecurityWarden account can revoke it.
 
 Rules are in SecurityWarden, so a compromised or confused agent can't loosen them; the connector's declared
-risk can only tighten them (high-risk actions always ask). The honest limit stays: whoever controls the
+risk is shown when choosing them, and the suggested rules ask for high-risk actions. The honest limit stays: whoever controls the
 agent's machine holds the token and the application's credentials.
 
 **Finding connectors.** The ones turned on for the token's project in SecurityWarden (see "Connector
@@ -650,6 +652,20 @@ on the website, for people and as a fallback); the website's token set-up shows 
   once; calling one asks for the approval as usual and runs once the connectors load. A remembered tool the token no
   longer has answers "isn't available any more". Rewritten whenever the real list is read (not while an approval
   proxy's new tool list waits for a person, so it only ever holds tool descriptions a person approved).
+- Tools announced once approved (0.6.0.dev24): while a session request or an approval proxy's tool-list request
+  that `sw-mcp` already made is waiting, it checks every 10 s; when the tools load it sends
+  `notifications/tools/list_changed`, without waiting for the agent to call something. It never makes a new request
+  on its own: a denied or expired request stops the checks.
+- What started the client (0.6.0.dev24): machine tokens send `origin` with `POST /v1/auth`, the names of up to three
+  ancestor processes, parent first (`["hermes gateway", "systemd"]`, or `["python3 -c", "bash", "hermes gateway"]`
+  when an agent's own code started `sw-mcp`). Names only: a program's or script's file name and at most one plain
+  sub-command word; no paths, no other arguments. The website, phone messages, `swctl approvals list`, swadmin and
+  the audit log show it on the session request as "started by ... (as the machine reports it)". It is unverified (the
+  machine reports it) and sent in plain text like the address; `SW_SEND_ORIGIN=0` turns it off.
+- Code execution is the boundary: an agent that can run code as the same user can start any MCP entry on the
+  machine itself (`sw-mcp serve` with that entry's settings), whether or not its agent app lists the tools. What
+  holds it is the server: the session approval, the token's rules and its connectors. To keep a bot to its own
+  tools, turn off its code/terminal tool, or run it as its own user with its own `SW_Tokens.json`.
 - Connector rollback state: `connector-versions/id-<token id>.json` in the same folder (before 0.6.0.dev19
   `<token name>.json`, copied over once).
 

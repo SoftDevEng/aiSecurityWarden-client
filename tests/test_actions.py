@@ -39,13 +39,18 @@ def test_policy_vectors():
             normalize_action_policy(bad)
 
 
-def test_high_risk_is_never_allowed_or_windowed():
+def test_the_rules_decide_whatever_the_risk():
+    """0.6.0.dev24: the owner's rules decide, high risk included (the suggested rules ask for high-risk actions).
+    Approving a proxy's changed tool list is the one thing no rule can allow."""
     p = normalize_action_policy({"rules": [{"match": "*", "mode": "allow"}]})
-    assert action_decision(p, "gmail.send", "high") == ("each", None)
+    assert action_decision(p, "gmail.send", "high") == ("allow", None)
     assert action_decision(p, "gmail.send", "medium") == ("allow", None)
+    assert action_decision(p, "github.tools.approve", "high") == ("each", None)
     p = normalize_action_policy({"rules": [{"match": "gmail.*", "mode": "window", "window": 600}]})
-    assert action_decision(p, "gmail.send", "high") == ("each", None)
+    assert action_decision(p, "gmail.trash", "high") == ("window", 600)
     assert action_decision(p, "gmail.label", "low") == ("window", 600)
+    assert action_decision(p, "gmail.tools.approve", "high") == ("each", None)
+    assert action_decision(None, "gmail.trash", "high") == ("each", None)         # no rule: ask
     # deny stays deny whatever the risk
     p = normalize_action_policy({"rules": [{"match": "gmail.*", "mode": "deny"}]})
     assert action_decision(p, "gmail.read.search", "low") == ("deny", None)
@@ -178,7 +183,7 @@ def test_scope_vectors_and_rules_by_argument():
     for d in s["decisions"]:
         assert action_decision(pol, "github.pr.merge", "medium", d["scope"])[0] == d["mode"]
     assert [d["mode"] for d in s["decisions"]] == ["allow", "each", "each", "each"]
-    assert action_decision(pol, "github.pr.merge", "high", s["decisions"][0]["scope"])[0] == "each"   # risk tightens
+    assert action_decision(pol, "github.pr.merge", "high", s["decisions"][0]["scope"])[0] == "allow"  # rules decide
 
 
 @pytest.mark.parametrize("text", ["x[repo=]=allow", "x[repo=a*b]=allow", "x[Repo=a]=allow", "x[a=1,a=2]=allow",

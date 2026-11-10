@@ -45,7 +45,7 @@ def test_the_checker_finds_the_usual_mistakes():
                      "required 'missing' is not a parameter", "'ghost' is in params but not an argument",
                      "optional parameter 'amount' needs a default", "required parameter 'to' shouldn't have a default",
                      "suggested rule 'bad.thing=sometimes'", "warning: suggested rule 'other.*=each' matches none",
-                     "covers high-risk actions", "usually risk low", "say what the list holds", "no description"):
+                     "lets high-risk actions run without asking", "usually risk low", "say what the list holds", "no description"):
         assert expected in text, expected
 
     class Unnamed(Connector):
