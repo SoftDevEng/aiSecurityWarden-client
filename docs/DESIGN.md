@@ -249,7 +249,10 @@ beyond either; no hourly check when `max_per_hour` is `null`) prevent prompt flo
 whatever its outcome. An admin can let a token ask again at once with
 `POST /v1/admin/tokens/{id}/approval/reset`: it records `credentials.approval_reset_at`
 (requests from before it stop counting) and cancels the token's pending requests. Approved
-sessions are kept and no history is deleted. The token list reports `approvals_this_hour`. Audited: request created or refused, notification
+sessions are kept and no history is deleted. The token list reports `approvals_this_hour` and
+`actions_this_hour`. Session/fetch requests and action requests have separate counts and, from server 0.6.0.dev19,
+separate resets: `?what=session` resets only sessions and fetches; `POST /v1/admin/tokens/{id}/actions/reset`
+(`credentials.actions_reset_at`) only actions, also ending open action windows; without `what` both, as before. Audited: request created or refused, notification
 sent or failed (channel only), approved, denied, expired, redeemed, refused redemption
 (wrong address / nonce / reuse), policy changed (with the number of approvals cancelled),
 limits reset (with the number of pending requests cancelled).
