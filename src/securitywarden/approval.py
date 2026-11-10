@@ -306,18 +306,25 @@ def window_key(action: str, rule: Mapping[str, Any] | None) -> str:
     return action
 
 
+def always_asks(action: str) -> bool:
+    """Approving an approval proxy's changed tool list ("<name>.tools.approve") is a check on the rules
+    themselves, not an action in an app: no rule can allow it or open a window for it."""
+    return action.endswith(".tools.approve")
+
+
 def action_decision(policy: Mapping[str, Any] | None, action: str, risk: str,
                     scope: Mapping[str, Any] | None = None) -> tuple[str, int | None]:
-    """(mode, window seconds) for an action. A high-risk action is never allowed without asking and
-    never covered by a time window: such rules are tightened to "each". Risk only ever tightens. A rule with a
-    ``where`` condition only matches requests whose ``scope`` satisfies it."""
+    """(mode, window seconds) for an action: the token's rules decide (0.6.0.dev24: whatever the action's risk;
+    the connectors' suggested rules ask for every high-risk action). Nothing matched: "each". A rule with a
+    ``where`` condition only matches requests whose ``scope`` satisfies it. Approving a proxy's tool list always
+    asks (always_asks); a deny rule still denies it."""
     if not ACTION_RE.match(action or ""):
         raise ValueError("invalid action name (e.g. gmail.send: lowercase words joined by dots)")
     if risk not in RISKS:
         raise ValueError(f"risk must be one of: {', '.join(RISKS)}")
     r = matching_rule(policy, action, scope)
     mode, window = (r["mode"], r.get("window")) if r else ("each", None)
-    if risk == "high" and mode in ("allow", "window"):
+    if always_asks(action) and mode in ("allow", "window"):
         return "each", None
     return mode, window
 

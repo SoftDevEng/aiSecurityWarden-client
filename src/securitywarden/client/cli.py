@@ -504,6 +504,8 @@ def cmd_approvals(args: argparse.Namespace) -> int:
                   f"expires {_ts(a['expires_at'])}{note}")
             if a["kind"] == "action":
                 print(f"    {_action_text(c, a)}")
+            elif a.get("origin"):
+                print(f"    started by {' <- '.join(a['origin'])} (as the machine reports it)")
     else:
         if args.match is not None:
             pending = {a["id"]: a for a in c.list_approvals()}

@@ -144,6 +144,10 @@ class SecurityWardenClient:
             if r.status_code == 200:
                 return self._take_session(r)
         proof = {"id": self.cred.id, "secret": self.cred.secret, "nonce": crypto.new_nonce()}
+        if self.cred.kind != "a":
+            from .origin import origin      # what started this client, for the person approving the session
+            if names := origin():
+                proof["origin"] = names
         if self._mfa_session:
             proof["mfa_session"] = self._mfa_session
         r = self.http.post(f"{self.base}/v1/auth", json=proof)

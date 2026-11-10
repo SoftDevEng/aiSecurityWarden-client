@@ -146,3 +146,29 @@ first tool call asks for the approval. Running `doctor` once after approving als
 the full set and the agent still shows only `check_approval` and `securitywarden_setup`, refresh the agent's tools or
 start a new session (Hermes keeps a session's tool list). `sw-mcp serve` also logs "connectors not loaded yet: waiting for a person to approve …"
 in that case.
+
+The list is remembered per token id. If the entry's `SW_TOKEN_ID` is a token that was later rotated, `sw-mcp`
+follows it to the new token (and remembers the list under the new id); doctor then warns "SW_TOKEN_ID … was replaced
+by …": put the new id in the MCP entry. An agent app reads the tool list when it starts the MCP server, so after
+running doctor, restart the agent app (for Hermes, the gateway too) if its MCP servers were already running.
+
+From 0.6.0.dev24, `sw-mcp` also tells the agent app when the tools arrive after you approve
+(`notifications/tools/list_changed`). Apps that follow that message pick the tools up mid-session; others still need
+a new session.
+
+## A rule doesn't seem to apply
+
+Rule changes apply to the agent's very next request; nothing needs restarting. If an action still asks:
+
+- **The rule must name the action exactly**: deleting mail is `gmail.trash` (there is no `gmail.delete`). The website
+  lists rules that match none of the connector's actions.
+- Before client 0.6.0.dev24 high-risk actions (`gmail.send`, `.reply`, `.forward`, `.trash`) always asked, whatever
+  the rule. Now your rules decide; the suggested rules still ask for them, and the website notes any line that lets
+  one run without asking.
+- The first rule that matches wins: an earlier `gmail.*=each` decides before a later `gmail.label=allow`.
+
+## Who asked for a session?
+
+From 0.6.0.dev24 a session request shows what started the agent's client, for example "started by hermes gateway
+<- systemd". "python3 -c" or "bash -c" in front of it means code the agent ran itself started `sw-mcp` (an agent that
+can run code can start any MCP entry on its machine). If you didn't expect it, deny it.

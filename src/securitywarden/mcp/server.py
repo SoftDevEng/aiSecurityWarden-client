@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from typing import IO, Any
 
 from .. import __version__
@@ -28,14 +29,40 @@ INSTRUCTIONS = (
 
 
 class StdioServer:
+    WATCH_EVERY = 10.0      # seconds between checks while an approval that brings tools is waiting
+
     def __init__(self, hub: Hub, *, name: str = "securitywarden") -> None:
         self.hub = hub
         self.name = name
         self.initialized = False
+        self._lock = threading.Lock()       # one message at a time, from the agent or the watcher
+
+    def _notify_if_changed(self, stdout: IO[bytes]) -> None:
+        if self.initialized and self.hub.tools_changed:      # a connector was turned on, off or updated
+            self.hub.tools_changed = False
+            self._send(stdout, {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+
+    def watch_once(self, stdout: IO[bytes]) -> None:
+        """While a session or tool-list approval is waiting, look again; once it's approved and the tools load,
+        tell the agent (notifications/tools/list_changed) without waiting for it to call something."""
+        with self._lock:
+            if not self.initialized or not self.hub.waiting():
+                return
+            self.hub.refresh(force=True)
+            self._notify_if_changed(stdout)
+
+    def _watch(self, stdout: IO[bytes], stop: threading.Event) -> None:
+        while not stop.wait(self.WATCH_EVERY):
+            try:
+                self.watch_once(stdout)
+            except Exception as e:  # noqa: BLE001 - the watcher only helps; the agent's requests still work
+                print(f"sw-mcp: approval check failed: {type(e).__name__}", file=sys.stderr, flush=True)
 
     def serve(self, stdin: IO[bytes] | None = None, stdout: IO[bytes] | None = None) -> None:
         stdin = stdin or sys.stdin.buffer
         stdout = stdout or sys.stdout.buffer
+        stop = threading.Event()
+        threading.Thread(target=self._watch, args=(stdout, stop), name="sw-mcp-watch", daemon=True).start()
         try:
             while True:
                 line = stdin.readline(MAX_LINE + 1)
@@ -48,14 +75,15 @@ class StdioServer:
                     continue
                 if not line.strip():
                     continue
-                reply = self.handle_line(line)
-                if reply is not None:
-                    self._send(stdout, reply)
-                if self.initialized and self.hub.tools_changed:      # a connector was turned on, off or updated
-                    self.hub.tools_changed = False
-                    self._send(stdout, {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+                with self._lock:
+                    reply = self.handle_line(line)
+                    if reply is not None:
+                        self._send(stdout, reply)
+                    self._notify_if_changed(stdout)
         finally:
-            self.hub.close()
+            stop.set()
+            with self._lock:
+                self.hub.close()
 
     @staticmethod
     def _send(stdout: IO[bytes], msg: dict[str, Any]) -> None:

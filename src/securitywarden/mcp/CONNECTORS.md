@@ -101,9 +101,10 @@ Put all reads under `.read.` so one rule (`notes.read.*=allow`) covers them. Giv
 change its own action, so people can allow one and keep asking for another.
 
 ### Risk
-`low`, `medium` or `high`. Risk only tightens the user's rules: a **high-risk action always asks a person**,
-whatever the rules say, and "allow for 30 minutes" windows never cover it. When unsure, choose the higher risk.
-Anything that sends data outside, costs money, can't be undone, or acts in the user's name is `high`.
+`low`, `medium` or `high`. The user's rules decide what asks a person; risk is what they see when choosing, and
+your `suggested_rules` must ask (`=each`) for every high-risk action (the checker warns otherwise). When unsure,
+choose the higher risk. Anything that sends data outside, costs money, can't be undone, or acts in the user's name
+is `high`.
 
 ### Parameters
 A JSON Schema subset, checked before your method runs:

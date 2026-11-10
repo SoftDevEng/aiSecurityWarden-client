@@ -129,7 +129,7 @@ def tool(description: str, *, action: str, risk: str = "high", params: Mapping[s
     """Declare a connector method as a tool. The method takes the tool's arguments and returns a :class:`Plan`.
 
     ``action`` is the name SecurityWarden's rules match (``<connector>.<verb>[.<more>]``); ``risk`` is
-    "low", "medium" or "high". High-risk actions always ask a person, whatever the rules say."""
+    "low", "medium" or "high": shown to the person choosing rules and approving; the token's rules decide."""
     if not ACTION_RE.match(action):
         raise ValueError(f"invalid action name {action!r}")
     if risk not in RISKS:
@@ -482,6 +482,13 @@ class Hub:
             self._remembered = current
         except OSError as e:
             self.log(f"couldn't remember the tool list ({type(e).__name__})")
+
+    def waiting(self) -> bool:
+        """An approval is waiting that would bring tools without the agent asking again: this token's session
+        (connectors not loaded yet), or an approval proxy's changed tool list."""
+        session = (self.client is not None and getattr(self.client, "_pending_auth", None) is not None
+                   and not self._loaded_ok)
+        return session or any(getattr(type(i), "_pin_request", None) for i in self.instances)
 
     def _connectors_waiting(self) -> bool:
         """The server's connector list couldn't be read yet (the token's session waits for a person, or no token)."""

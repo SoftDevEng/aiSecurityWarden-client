@@ -1106,7 +1106,7 @@
     {
      "action": "gmail.read.message",
      "risk": "high",
-     "mode": "each",
+     "mode": "allow",
      "window": null
     },
     {
@@ -1118,8 +1118,8 @@
     {
      "action": "gmail.label",
      "risk": "high",
-     "mode": "each",
-     "window": null
+     "mode": "window",
+     "window": 1800
     },
     {
      "action": "gmail.delete",
@@ -1148,6 +1148,12 @@
     {
      "action": "gmail.readx.search",
      "risk": "low",
+     "mode": "each",
+     "window": null
+    },
+    {
+     "action": "gmail.tools.approve",
+     "risk": "high",
      "mode": "each",
      "window": null
     }

@@ -352,7 +352,8 @@ def build() -> dict[str, Any]:
     decisions = []
     for act, risk in (("gmail.read.search", "low"), ("gmail.read.message", "high"), ("gmail.label", "low"),
                       ("gmail.label", "high"), ("gmail.delete", "high"), ("gmail.send", "high"), ("webull", "low"),
-                      ("webull.order.place", "medium"), ("gmail.readx.search", "low")):
+                      ("webull.order.place", "medium"), ("gmail.readx.search", "low"),
+                      ("gmail.tools.approve", "high")):
         mode, window = approval.action_decision(npol, act, risk) if approval.ACTION_RE.match(act) else (None, None)
         decisions.append({"action": act, "risk": risk, "mode": mode, "window": window})
     v["actions"]["policy"] = {"input": pol, "output": npol, "decisions": decisions,

@@ -191,6 +191,13 @@ def _hub(args: argparse.Namespace, cfg: dict[str, Any]) -> Hub:
                              token_id=_token_id(args, cfg))
         state = (lambda: _versions_path(store, target))
         tool_cache = (lambda: _tool_cache_path(store, target))
+        try:
+            wanted, got = _token_id(args, cfg), target._pick()
+            if wanted and got and wanted != got:
+                print(f"sw-mcp: SW_TOKEN_ID {wanted} was replaced by {got} (rotated); using {got}. Set "
+                      f"SW_TOKEN_ID={got} in the MCP entry.", file=sys.stderr, flush=True)
+        except SecurityWardenError:
+            pass
     client = None
     try:
         if target.has_token():
@@ -339,6 +346,10 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         cache_path = os.path.join(os.path.dirname(store.path), "tool-cache",
                                   "id-" + re.sub(r"[^A-Za-z0-9._-]", "_", tid) + ".json")
         say("ok", f"token {e['name']!r} (id {tid}, project {e.get('project') or '?'}) from {store.path}, found by {asked}")
+        wanted = _token_id(args, cfg)
+        if wanted and wanted != tid:
+            say("WARN", f"SW_TOKEN_ID {wanted} was replaced by {tid} (the token was rotated). This still works, but "
+                f"set SW_TOKEN_ID={tid} in the MCP entry so it names the token the website shows")
         if e.get("server") and e["server"].rstrip("/").lower() != url.rstrip("/").lower():
             say("WARN", f"that token was set up for {e['server']}, but this entry uses {url}")
         cred = store.credential(tid)
@@ -571,7 +582,7 @@ def cmd_proxy_init(args: argparse.Namespace) -> None:
     print(f"{len(report)} tools from the server:")
     for tname, action, risk, why in report:
         print(f"  {tname:<{width}}  {action:<40} {risk:<6}  {why}")
-    print(f"\nWrote {out}. Check each tool's risk (high: always asks; the server's hints aren't trusted for you),\n"
+    print(f"\nWrote {out}. Check each tool's risk (the server's hints aren't trusted for you; rules show it),\n"
           "add summaries and scopes if you like (docs/mcp-proxy.md), then upload it on the aiSecurityWarden website\n"
           f"(Connectors) and add the secret{'s' if len(secrets) != 1 else ''} {', '.join(secrets) or '(none)'} to the "
           "project.")

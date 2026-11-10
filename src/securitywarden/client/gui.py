@@ -48,7 +48,9 @@ def _what(a: dict[str, Any]) -> str:
         summary = a.get("summary")
         title = summary.get("title") if isinstance(summary, dict) else None
         return f"{title} ({a['action']})" if isinstance(title, str) else f"{a['action']} (details unavailable)"
-    return "start a session" if a["kind"] == "auth" else "read secrets"
+    what = "start a session" if a["kind"] == "auth" else "read secrets"
+    origin = a.get("origin")
+    return f"{what} (started by {' <- '.join(origin)})" if isinstance(origin, list) and origin else what
 
 
 APPROVAL_MODES = {"No approval": None, "Once per session": "session", "Every fetch": "every_fetch"}
