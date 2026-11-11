@@ -98,6 +98,18 @@ it ships with the python.org installers for Windows and macOS; on Debian/Ubuntu,
 
 The website works in Safari too (CI runs it in WebKit, Safari's engine).
 
+### Updating
+
+```bash
+sw-mcp update --check     # or: swctl update --check
+sw-mcp update             # installs the newest signed release; never an older one
+```
+
+Or ask your agent: "check for aiSecurityWarden updates" / "update aiSecurityWarden". The agent's
+`securitywarden_update` tool asks you to approve the exact version first. Restart the agent app afterwards. When a
+newer client is out, the agent is told once (and every time if the server requires it). Updates are signed with
+an offline release key and checked against the key built into the client; see DESIGN.md "Client updates".
+
 From source:
 
 ```bash

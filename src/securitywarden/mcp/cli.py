@@ -7,6 +7,7 @@
     sw-mcp call gmail_search query=is:unread limit=5    # try one tool by hand (waits for approval)
     sw-mcp setup --token-file ~/.config/securitywarden/gmail-token   # store the token from a setup code
     sw-mcp pack notes                                # pack a connector to upload on the website
+    sw-mcp update [--check]                          # install the newest signed aiSecurityWarden client
 
 Connectors turned on for the token's project on the SecurityWarden website (Connectors) are loaded too, and
 updated while running when uploaded with "go live now" (SW_MCP_REMOTE=0 turns this off).
@@ -103,6 +104,15 @@ def _connectors(args: argparse.Namespace, cfg: dict[str, Any]) -> list[type[Conn
     return [load_connector(r) for r in dict.fromkeys(refs)]
 
 
+def _updater() -> Any:
+    """Client updates for the agent (securitywarden_check_update / securitywarden_update), unless SW_MCP_UPDATES=0
+    (e.g. where installs are managed centrally)."""
+    if os.environ.get("SW_MCP_UPDATES", "1").strip().lower() in ("0", "no", "false", "off"):
+        return None
+    from ..client.update import Updater
+    return Updater()
+
+
 def _source(state_path: Any) -> RemoteConnectors | None:
     if os.environ.get("SW_MCP_REMOTE", "1").strip().lower() in ("0", "no", "false", "off"):
         return None
@@ -171,7 +181,7 @@ def _hub(args: argparse.Namespace, cfg: dict[str, Any]) -> Hub:
     url, token_file, verify = _settings(args, cfg)
     connectors = _connectors(args, cfg)
     if os.environ.get("SW_ACCESS_TOKEN") and not token_file:
-        return Hub(_client(args, cfg, wait=False), connectors, source=_source(lambda: None))
+        return Hub(_client(args, cfg, wait=False), connectors, source=_source(lambda: None), updater=_updater())
     if url:
         try:
             _check_url(url)
@@ -204,7 +214,7 @@ def _hub(args: argparse.Namespace, cfg: dict[str, Any]) -> Hub:
             client = make(target.load())
     except SecurityWardenError as e:
         print(f"sw-mcp: {e}", file=sys.stderr, flush=True)
-    return Hub(client, connectors, setup=target, source=_source(state), tool_cache=tool_cache)
+    return Hub(client, connectors, setup=target, source=_source(state), tool_cache=tool_cache, updater=_updater())
 
 
 def _tool_cache_path(store: TokenStore, target: SetupTarget) -> str | None:
@@ -397,6 +407,15 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         except SecurityWardenError as e:
             say("FAIL", f"sign-in failed: {e}")
             sys.exit(1)
+
+    # 3b. client version
+    try:
+        from ..client.update import check as check_update
+        upd = check_update(client)
+        say("WARN" if upd.available else "ok", upd.text()
+            + (" Install it with: sw-mcp update (or ask the agent to)" if upd.available and not upd.problem else ""))
+    except Exception as e:  # noqa: BLE001 - an old server, or no release published: not a problem
+        say("ok", f"client {__version__} (couldn't check for updates: {type(e).__name__})")
 
     # 4. what the server gives this token
     try:
@@ -670,6 +689,14 @@ def cmd_new_connector(args: argparse.Namespace) -> None:
           f"  pip install -e {where}\n  sw-mcp check --connector {args.name}\n  pytest {where}", file=sys.stderr)
 
 
+def cmd_update(args: argparse.Namespace) -> None:
+    """Check for (and install) the newest aiSecurityWarden client, signed and newer than this one. The person
+    running it is the approval; the agent's securitywarden_update tool asks the owner instead."""
+    from ..client.update import run_cli
+    cfg = _config(args)
+    sys.exit(run_cli(_client(args, cfg), check_only=args.check, yes=args.yes, prog="sw-mcp"))
+
+
 def cmd_login(args: argparse.Namespace) -> None:
     cls = load_connector(args.connector_name)
     login = getattr(cls, "login", None)
@@ -743,6 +770,11 @@ def main(argv: list[str] | None = None) -> None:
     su.add_argument("--replace", action="store_true", help="replace a token that is already stored")
     su.add_argument("--code-stdin", action="store_true", help="read the code from stdin instead of asking")
     su.set_defaults(fn=cmd_setup)
+    up = sub.add_parser("update", help="install the newest aiSecurityWarden client (signed, never older)")
+    common(up, connectors=False)
+    up.add_argument("--check", action="store_true", help="only say whether an update is available (exit 2 if so)")
+    up.add_argument("--yes", action="store_true", help="don't ask before installing")
+    up.set_defaults(fn=cmd_update)
     lg = sub.add_parser("login", help="one-time sign-in for a connector (e.g. gmail)")
     lg.add_argument("connector_name")
     common(lg, connectors=False)

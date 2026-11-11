@@ -275,6 +275,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 
 
+def cmd_update(args: argparse.Namespace) -> int:
+    """Check for (and install) the newest aiSecurityWarden client, with this machine's token (or --admin-file)."""
+    from .update import run_cli
+    client = _admin_client(args) if args.admin_file else _machine_client(args)
+    return run_cli(client, check_only=args.check, yes=args.yes, prog="swctl")
+
+
 def cmd_tokens(args: argparse.Namespace) -> int:
     """The tokens in SW_Tokens.json on this machine (never their secrets), and moving a token file of its own
     (SW_ACCESS_TOKEN_FILE, from older setups) into it."""
@@ -588,6 +595,11 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--replace", action="store_true", help="replace a token that is already stored")
     st.add_argument("--code-stdin", action="store_true", help="read the code from stdin instead of asking")
     st.set_defaults(func=cmd_setup)
+
+    up = sub.add_parser("update", help="install the newest aiSecurityWarden client (signed, never older)")
+    up.add_argument("--check", action="store_true", help="only say whether an update is available (exit 2 if so)")
+    up.add_argument("--yes", action="store_true", help="don't ask before installing")
+    up.set_defaults(func=cmd_update)
 
     tk = sub.add_parser("tokens", help="the tokens stored on this machine (SW_Tokens.json)")
     tks = tk.add_subparsers(dest="action", required=True)

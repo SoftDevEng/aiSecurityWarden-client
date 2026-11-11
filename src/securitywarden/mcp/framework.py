@@ -300,12 +300,22 @@ class Hub:
 
     CHECK_TOOL = "check_approval"
     SETUP_TOOL = "securitywarden_setup"
+    CHECK_UPDATE_TOOL = "securitywarden_check_update"
+    UPDATE_TOOL = "securitywarden_update"
+    UPDATE_ACTION = "securitywarden.update"
+    UPDATE_CHECK_EVERY = 6 * 3600.0       # seconds between automatic update checks (for the notice)
 
     def __init__(self, client: Any, connectors: Sequence[type[Connector]], *, setup: SetupTarget | None = None,
                  log: Callable[[str], None] = _log, clock: Callable[[], float] = time.monotonic,
                  source: Any = None, refresh_every: float = 30.0,
-                 tool_cache: Callable[[], str | None] | None = None) -> None:
+                 tool_cache: Callable[[], str | None] | None = None, updater: Any = None) -> None:
         self.client = client
+        # client updates (securitywarden.client.update): offers securitywarden_check_update / securitywarden_update
+        # and adds a one-line notice to a tool result when a newer client is out
+        self.updater = updater
+        self._update_checked_at: float | None = None
+        self._update_note: str | None = None
+        self._update_noted = False
         self.setup = setup
         self.offer_setup = setup is not None      # first setup, and a new token after the old one was revoked
         self.ctx = Context(client)
@@ -530,6 +540,26 @@ class Hub:
                             "required": ["request_id"], "additionalProperties": False},
             "annotations": {"readOnlyHint": False},
         })
+        if self.updater is not None:
+            out.append({
+                "name": self.CHECK_UPDATE_TOOL,
+                "description": "Check whether a newer aiSecurityWarden client (this MCP server) is available, and "
+                               "whether the server requires it. Read-only. Use it when the user asks about updates "
+                               "or aiSecurityWarden says one is available.",
+                "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+                "annotations": {"readOnlyHint": True},
+            })
+            out.append({
+                "name": self.UPDATE_TOOL,
+                "description": "Install the newest aiSecurityWarden client (this MCP server) on this machine, when "
+                               "the user asks for it. Takes no arguments: only a release signed by aiSecurityWarden "
+                               "and newer than the installed one is installed. Needs the user's approval through "
+                               "aiSecurityWarden unless their rules allow it: then you get status "
+                               "waiting_for_approval and should call check_approval later. Afterwards the agent app (or its MCP servers) must be "
+                               "restarted.",
+                "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+                "annotations": {"readOnlyHint": False, "destructiveHint": False},
+            })
         if self.offer_setup:
             out.append({
                 "name": self.SETUP_TOOL,
@@ -554,7 +584,8 @@ class Hub:
             return self._setup(arguments)
         if self.client is not None:
             self.refresh()
-        known = name == self.CHECK_TOOL or name in self.tools
+        builtin = (self.CHECK_TOOL,) + ((self.CHECK_UPDATE_TOOL, self.UPDATE_TOOL) if self.updater is not None else ())
+        known = name in builtin or name in self.tools
         if not known and self.source is None:
             raise KeyError(name)
         try:
@@ -573,7 +604,7 @@ class Hub:
                     if name in self.remembered():
                         return self._gone(name)
                     raise KeyError(name)
-            return self._call(name, arguments)
+            return self._with_update_note(self._call(name, arguments), name)
         except ApprovalPending as e:
             return self._waiting_for_person(e, name, arguments)
         except TokenRejected:
@@ -599,6 +630,10 @@ class Hub:
             if not isinstance(rid, str) or set(arguments) != {"request_id"}:
                 return Result("check_approval takes one argument, request_id.", True)
             return self._check(rid)
+        if self.updater is not None and name in (self.CHECK_UPDATE_TOOL, self.UPDATE_TOOL):
+            if arguments:
+                return Result(f"{name} takes no arguments.", True)
+            return self._check_update() if name == self.CHECK_UPDATE_TOOL else self._update()
         if name not in self.tools:
             raise KeyError(name)
         inst, spec = self.tools[name]
@@ -630,34 +665,119 @@ class Hub:
             self.log(f"{name}: preparing failed: {type(e).__name__}")
             return Result(f"Preparing the action failed ({type(e).__name__}).", True)
 
+        return self._gate(name, spec.action, spec.risk, plan, digest)
+
+    def _gate(self, name: str, action: str, risk: str, plan: Plan, digest: str) -> Result:
+        """Ask aiSecurityWarden whether this prepared action may run now; run it, or tell the AI to wait."""
         # the same action asked again while it waits: check on that request instead of asking twice
         for rid, p in list(self.pending.items()):
-            if p.digest == digest and p.action == spec.action:
+            if p.digest == digest and p.action == action:
                 return self._check(rid)
 
         try:
             scope = getattr(plan, "scope", None)
-            r = (self.client.request_action(spec.action, plan.args, plan.summary.as_dict(), risk=spec.risk, scope=scope)
+            r = (self.client.request_action(action, plan.args, plan.summary.as_dict(), risk=risk, scope=scope)
                  if scope else
-                 self.client.request_action(spec.action, plan.args, plan.summary.as_dict(), risk=spec.risk))
+                 self.client.request_action(action, plan.args, plan.summary.as_dict(), risk=risk))
         except ApprovalError as e:
-            self.log(f"{name}: {spec.action} refused ({e.reason})")
+            self.log(f"{name}: {action} refused ({e.reason})")
             return Result(_OUTCOMES.get(e.reason, f"SecurityWarden refused the action ({e})."), True)
         except (ApprovalPending, TokenRejected):
             raise
         except SecurityWardenError as e:
-            self.log(f"{name}: {spec.action} not requested ({_short(e)})")
+            self.log(f"{name}: {action} not requested ({_short(e)})")
             return Result(_service_problem(e), True)
 
         if r["status"] == "approved":
-            self.log(f"{name}: {spec.action} allowed by the token's rules")
+            self.log(f"{name}: {action} allowed by the token's rules")
             return self._run(name, plan)
 
         self._remember(r["request_id"], _Pending(
-            name, spec.action, plan, r["nonce"], r["digest"], r.get("match"),
+            name, action, plan, r["nonce"], r["digest"], r.get("match"),
             self.clock() + float(r.get("expires_in") or 3600), int(r.get("check_after") or 30)))
-        self.log(f"{name}: {spec.action} waiting for approval (request {r['request_id']})")
+        self.log(f"{name}: {action} waiting for approval (request {r['request_id']})")
         return self._waiting(r["request_id"])
+
+    # -- client updates (securitywarden.client.update) ----------------------------------
+
+    def _check_update(self) -> Result:
+        from ..release import ReleaseError
+        try:
+            info = self.updater.check(self.client)
+        except (ApprovalPending, TokenRejected):
+            raise
+        except (SecurityWardenError, ReleaseError) as e:
+            return Result(f"Couldn't check for aiSecurityWarden updates: {_short(e)}.", True)
+        self._noted(info)
+        data = info.as_dict()
+        text = info.text()
+        if info.available and not info.problem:
+            text += " To install it, call securitywarden_update (the user approves it in aiSecurityWarden)."
+        return Result(text, False, data)
+
+    def _update(self) -> Result:
+        """Prepare the update as an action: the owner approves this exact version and SHA-256 on this machine."""
+        from ..release import ReleaseError
+        try:
+            info = self.updater.check(self.client)
+        except (ApprovalPending, TokenRejected):
+            raise
+        except (SecurityWardenError, ReleaseError) as e:
+            return Result(f"Couldn't check for aiSecurityWarden updates: {_short(e)}.", True)
+        if not info.available:
+            return Result(info.text() + " Nothing to install.", info.problem is not None)
+        if info.problem:
+            return Result(info.text(), True)
+        import platform
+        host = platform.node() or "this machine"
+        args = {"version": info.latest, "sha256": info.sha256, "installed": info.installed, "host": host}
+        summary = Summary(f"Update aiSecurityWarden on {host} to {info.latest}",
+                          [("Machine", host), ("Installed", info.installed), ("New version", str(info.latest)),
+                           ("SHA-256", f"{info.sha256[:16]}…" if info.sha256 else "?"),
+                           ("Required by server", "yes" if info.required else "no")],
+                          preview=info.notes or None)
+        updater, client = self.updater, self.client
+
+        def run(a: dict[str, Any]) -> str:
+            fresh = updater.check(client)
+            wheel = updater.download(client, fresh, want_version=a["version"], want_sha256=a["sha256"])
+            msg = updater.install(wheel, a["version"])
+            self._update_note, self._update_noted = None, True
+            return msg
+
+        plan = Plan(args, summary, run)
+        try:
+            digest = action_digest(self.UPDATE_ACTION, plan.args)
+        except CryptoError as e:
+            return Result(f"Couldn't prepare the update ({e}).", True)
+        return self._gate(self.UPDATE_TOOL, self.UPDATE_ACTION, "high", plan, digest)
+
+    def _noted(self, info: Any) -> None:
+        self._update_checked_at = self.clock()
+        if info.available:
+            self._update_note = (f"[aiSecurityWarden] A client update is {'REQUIRED' if info.required else 'available'}"
+                                 f" ({info.installed} -> {info.latest}). Tell the user; if they want it, call "
+                                 "securitywarden_update.")
+        else:
+            self._update_note = None
+
+    def _with_update_note(self, res: Result, name: str) -> Result:
+        """Once per process (on every call while the server requires it), tell the AI a client update is out, in a
+        line after a plain tool result. Never in structured results, never fails the call."""
+        if self.updater is None or self.client is None or name in (self.CHECK_UPDATE_TOOL, self.UPDATE_TOOL):
+            return res
+        now = self.clock()
+        if self._update_checked_at is None or now - self._update_checked_at >= self.UPDATE_CHECK_EVERY:
+            self._update_checked_at = now
+            try:
+                self._noted(self.updater.check(self.client))
+            except Exception as e:  # noqa: BLE001 - only a hint; the tool's own result matters
+                self.log(f"update check failed: {type(e).__name__}")
+        note = self._update_note
+        if not note or res.data or (self._update_noted and "REQUIRED" not in note):
+            return res
+        self._update_noted = True
+        return Result(f"{res.text}\n\n{note}", res.is_error, res.data)
 
     def _check(self, rid: str) -> Result:
         p = self.pending.get(rid)

@@ -577,6 +577,53 @@ is a 404):
 | `GET /v1/connectors/{cid}` (machine) | `{id, version, blob}` if chosen for the token; audited |
 | `GET/PUT /v1/admin/settings/connector-limits`, `PUT /v1/admin/users/{uid}/connector-limits` | the operator's limits |
 
+## Client updates
+
+Once customers run the client, a server change may need a newer client. They have to hear about it and have an
+easy, safe way to upgrade. (Added in 0.6.0.dev25.)
+
+**Signed releases.** A release is a client wheel plus `<wheel>.swrel`: a manifest (`format` `swrel1`, `package`,
+`version`, `file`, `sha256`, `size`, `published`, `notes`) and an Ed25519 signature over
+`"securitywarden/v1/release\n" || canonical JSON(manifest)` (sorted keys, no spaces). The release key is kept
+offline on the release workstation (`python -m securitywarden.release keygen|sign|verify`); its public key is
+built into the client (`securitywarden.release.TRUSTED_KEYS`, by key id = first 8 bytes of SHA-256 of the raw
+public key). A new key is added to `TRUSTED_KEYS` one release before it signs anything. The server never holds
+the release key, so whoever controls the server can't make machines install code that wasn't released.
+
+**Server.** `GET /v1/client/latest` (any signed-in credential) returns `{"release": <.swrel document> | null,
+"min_supported": <version> | null}`: the highest-versioned release in the operator's releases folder, and the
+oldest client the server still supports (operator setting). `GET /v1/client/releases/<file>` serves the wheel.
+Every client request carries `X-SW-Client: <version>`; the server keeps the last one per token, so the website can
+show each machine's client and say when it is behind. A version number only, nothing else about the machine.
+
+**Client.** Installs a release only if: the signature checks out with a built-in key; the manifest is well-formed
+(file name = `securitywarden-<version>-py3-none-any.whl`, matching the wheel's own METADATA when signing); the
+downloaded bytes match `size` and `sha256`; and the version is newer than the installed one (no downgrades, PEP 440
+ordering). It installs with `<this python> -m pip install --upgrade-strategy only-if-needed <wheel>` into the same
+environment it runs from. Development installs (`pip install -e`) and environments without pip refuse and say so.
+On Windows the running `sw-mcp.exe` / `swctl.exe` can't be replaced, so a detached helper waits for the process to
+exit and then installs (log next to the wheel, in the `updates` folder beside `SW_Tokens.json`).
+
+**From the agent.** `sw-mcp` offers two tools (unless `SW_MCP_UPDATES=0`):
+
+- `securitywarden_check_update`: read-only, no approval: installed, latest, required, notes.
+- `securitywarden_update`: takes no arguments. It becomes the high-risk action `securitywarden.update` with
+  args `{version, sha256, installed, host}` and a summary ("Update aiSecurityWarden on jarvis to 0.7.0"), through
+  the normal action gate, so the token's rules decide (unlisted actions ask): the owner approves this exact
+  version and SHA-256 on this machine. When it runs, the
+  release is fetched and checked again, and refused if it isn't the one approved.
+
+`sw-mcp` also checks every 6 hours while serving and, once per process, adds one line after a plain tool result
+("A client update is available (0.6.0 -> 0.7.0). Tell the user; if they want it, call securitywarden_update"); on
+every call while the server requires a newer client. Never in structured results (waiting_for_approval stays
+plain JSON), and a failed check never fails the tool call.
+
+**From a terminal.** `sw-mcp update [--check] [--yes]` and `swctl update [--check] [--yes]`: the person running
+it is the approval. `--check` exits 2 when an update is available. `sw-mcp doctor` reports the client version.
+
+After an update the agent app (or its MCP servers) must be restarted; until then the running process keeps the
+old code.
+
 ## Setup codes
 
 A machine token is long, works until revoked, and has to end up in a file only the machine's user can read.

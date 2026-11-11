@@ -47,7 +47,8 @@ from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -838,3 +839,56 @@ def verify_ed25519(public_key_hex: str, message: bytes, signature_hex: str) -> b
     except (InvalidSignature, ValueError):
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# signed client releases (DESIGN.md "Client updates")
+# ---------------------------------------------------------------------------
+#
+# Each client wheel the server hands out comes with a manifest (version, file name, SHA-256, size, notes) signed
+# with an Ed25519 release key that is kept offline. The client checks the signature with the public keys built
+# into it (securitywarden.release.TRUSTED_KEYS) before installing anything, so the server (or whoever controls
+# it) can't make machines install code that wasn't released. Signature = Ed25519(prefix || canonical JSON).
+
+RELEASE_SIG_PREFIX = b"securitywarden/v1/release\n"
+
+
+def release_message(manifest: dict[str, Any]) -> bytes:
+    """The exact bytes a release signature covers."""
+    return RELEASE_SIG_PREFIX + json.dumps(manifest, sort_keys=True, separators=(",", ":"),
+                                           ensure_ascii=False).encode("utf-8")
+
+
+def release_key_id(public_key_hex: str) -> str:
+    """A short name for a release key (first 8 bytes of SHA-256 of the raw public key, hex)."""
+    return hashlib.sha256(bytes.fromhex(public_key_hex)).hexdigest()[:16]
+
+
+def new_release_key(password: bytes) -> tuple[bytes, str]:
+    """A new release signing key: (PEM, encrypted with ``password``; public key hex)."""
+    if len(password) < 12:
+        raise CryptoError("use a passphrase of at least 12 characters for the release key")
+    key = Ed25519PrivateKey.generate()
+    pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                            serialization.BestAvailableEncryption(password))
+    return pem, _ed25519_public_hex(key)
+
+
+def _ed25519_public_hex(key: Ed25519PrivateKey) -> str:
+    return key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+
+
+def sign_release(pem: bytes, password: bytes, manifest: dict[str, Any]) -> tuple[str, str]:
+    """Sign a release manifest with the (encrypted) release key. Returns (key id, signature hex)."""
+    try:
+        key = serialization.load_pem_private_key(pem, password=password)
+    except (ValueError, TypeError) as e:
+        raise CryptoError("can't open the release key (wrong passphrase?)") from e
+    if not isinstance(key, Ed25519PrivateKey):
+        raise CryptoError("the release key must be an Ed25519 key")
+    return release_key_id(_ed25519_public_hex(key)), key.sign(release_message(manifest)).hex()
+
+
+def verify_release(public_key_hex: str, manifest: dict[str, Any], signature_hex: str) -> bool:
+    """True only if ``signature_hex`` is the release key's signature over this exact manifest."""
+    return verify_ed25519(public_key_hex, release_message(manifest), signature_hex)
