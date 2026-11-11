@@ -41,7 +41,7 @@ MAX_SWREL = 16 * 1024
 
 # Release keys this client trusts: key id -> Ed25519 public key (hex). Generated with ``keygen``; the private key
 # stays offline. Add a new key here one release *before* signing with it, so clients already trust it.
-TRUSTED_KEYS: dict[str, str] = {}
+TRUSTED_KEYS: dict[str, str] = {"4d9bbf4bf2978cb7": "72d3cc9abfffb0275b35aa2cc799a9ddd264f359538a2b46723f30f3e54a3053",}
 
 _VERSION_RE = re.compile(r"^(\d+(?:\.\d+)*)(?:(a|b|rc)(\d+))?(?:\.post(\d+))?(?:\.dev(\d+))?$")
 _PRE_RANK = {"a": 0, "b": 1, "rc": 2}
