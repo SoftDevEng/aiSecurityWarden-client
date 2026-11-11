@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
 
 import httpx
 
-from .. import crypto
+from .. import __version__, crypto
 from ..crypto import Credential, CryptoError
 from ..approval import ACTION_RE, RISKS, normalize_action_policy, normalize_action_summary, normalize_policy
 from ..ipallow import normalize_allowed_ips
@@ -118,6 +119,9 @@ class SecurityWardenClient:
         else:
             self.base = server_url.rstrip("/")
         self.http = http
+        # which client this is (DESIGN.md "Client updates"): the website shows it per token and says when a
+        # machine needs an update. A version number only, nothing about the machine.
+        self.http.headers["X-SW-Client"] = __version__
         self._token: str | None = None
         self._token_exp = 0.0
         self.on_approval = on_approval
@@ -228,7 +232,7 @@ class SecurityWardenClient:
         self._token_exp = time.monotonic() + max(0, int(data.get("expires_in", 60)) - 10)
 
     def _req(self, method: str, path: str, *, headers: dict[str, str] | None = None,
-             accept_403: bool = False, **kw: Any) -> httpx.Response:
+             accept_403: bool = False, accept_404: bool = False, **kw: Any) -> httpx.Response:
         for attempt in (1, 2):
             if not self._token or time.monotonic() >= self._token_exp:
                 self._authenticate()
@@ -237,7 +241,7 @@ class SecurityWardenClient:
             if r.status_code == 401 and attempt == 1:
                 self._token = None
                 continue
-            if accept_403 and r.status_code == 403:
+            if (accept_403 and r.status_code == 403) or (accept_404 and r.status_code == 404):
                 return r
             if r.status_code >= 400:
                 raise SecurityWardenError(f"{method} {path} failed ({r.status_code}): {_detail(r)}")
@@ -441,6 +445,30 @@ class SecurityWardenClient:
         except (CryptoError, ValueError, SecurityWardenError):
             return None
         return None
+
+    # -- client updates (DESIGN.md "Client updates") ------------------------------------
+
+    def client_release(self) -> dict[str, Any] | None:
+        """The newest client release the server offers and the oldest client it still supports:
+        ``{"release": {"manifest", "key_id", "signature"} | None, "min_supported": str | None}``.
+        None if the server is older than client updates. Nothing here is trusted until
+        ``securitywarden.release.verify`` checks the signature."""
+        r = self._req("GET", "/v1/client/latest", accept_404=True)
+        if r.status_code == 404:
+            return None
+        body = r.json()
+        if not isinstance(body, dict):
+            raise SecurityWardenError("unexpected answer from /v1/client/latest")
+        return body
+
+    def download_client_release(self, file: str, *, limit: int = 50 * 1024 * 1024) -> bytes:
+        """The bytes of one release file (a wheel named in a signed manifest). Checked by the caller."""
+        if not re.fullmatch(r"securitywarden-[0-9A-Za-z.]+-py3-none-any\.whl", file):
+            raise SecurityWardenError("not a client release file name")
+        r = self._req("GET", f"/v1/client/releases/{file}")
+        if len(r.content) > limit:
+            raise SecurityWardenError("the release file is too large")
+        return r.content
 
     # -- admin: projects ----------------------------------------------------------
 
