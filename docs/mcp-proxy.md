@@ -65,7 +65,7 @@ The fix is to run `sw-mcp` as a separate user that the agent can't become:
 ```bash
 sudo useradd --system --create-home --shell /usr/sbin/nologin swmcp
 sudo -u swmcp python3 -m venv /home/swmcp/venv
-sudo -u swmcp /home/swmcp/venv/bin/pip install securitywarden-<version>-py3-none-any.whl
+sudo -u swmcp /home/swmcp/venv/bin/pip install aisecuritywarden
 # move the token so only swmcp can read it
 sudo install -o swmcp -g swmcp -m 600 ~/.config/securitywarden/token /home/swmcp/token
 # let the agent's user start sw-mcp as swmcp, and nothing else:

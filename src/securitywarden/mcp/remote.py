@@ -1,4 +1,4 @@
-"""Connectors turned on for the token's project in SecurityWarden: built-in ones (shipped with this client)
+"""Connectors turned on for the token's project in aiSecurityWarden: built-in ones (shipped with this client)
 and custom ones (uploaded by the account, stored encrypted, loaded from memory).
 
 A custom connector's new version is loaded by a running ``sw-mcp`` when it was uploaded with "go live now";
@@ -93,7 +93,7 @@ class RemoteConnectors:
         except SecurityWardenError as e:
             if "(404)" not in str(e):
                 raise
-            self._tell(log, "", 0, "old-server", "this SecurityWarden server doesn't offer connectors yet; using only "
+            self._tell(log, "", 0, "old-server", "this aiSecurityWarden server doesn't offer connectors yet; using only "
                        "the connectors named in the MCP settings")
             return []
         self.policy = listing.get("actions") if isinstance(listing.get("actions"), dict) else None
@@ -103,7 +103,7 @@ class RemoteConnectors:
             make = self.builtin.get(name)
             if make is None:
                 self._tell(log, name, 0, "unknown", f"the project uses the built-in connector {name!r}, which this "
-                           "client doesn't have yet: update the SecurityWarden client")
+                           "client doesn't have yet: update the aiSecurityWarden client")
                 continue
             try:
                 out.append(make())

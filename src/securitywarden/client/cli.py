@@ -1,4 +1,4 @@
-"""swctl — SecurityWarden command-line client.
+"""swctl — aiSecurityWarden command-line client.
 
 Machine use (e.g. as a Hermes Agent command helper)::
 
@@ -432,7 +432,7 @@ def cmd_token(args: argparse.Namespace) -> int:
             print(f"Setup code for {args.name} (project {args.project}); works once, for 10 minutes:\n",
                   file=sys.stderr)
             print(code)
-            print("\nOn the machine: swctl setup (or sw-mcp setup), or tell its AI agent to set up SecurityWarden "
+            print("\nOn the machine: swctl setup (or sw-mcp setup), or tell its AI agent to set up aiSecurityWarden "
                   "with this code.", file=sys.stderr)
         else:
             print(f"Machine token for {args.name} (project {args.project}). Shown ONCE:\n", file=sys.stderr)
@@ -573,7 +573,7 @@ def _approval_args(x: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="swctl", description="SecurityWarden client")
+    p = argparse.ArgumentParser(prog="swctl", description="aiSecurityWarden client")
     p.add_argument("--version", action="version", version=__version__)
     p.add_argument("--server", help="server URL (default: $SW_SERVER_URL)")
     p.add_argument("--token-file", help="machine token file (default: $SW_ACCESS_TOKEN_FILE)")

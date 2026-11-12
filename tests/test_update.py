@@ -25,8 +25,8 @@ def key():
 def _wheel(tmp_path, version):
     path = tmp_path / release.wheel_name(version)
     with zipfile.ZipFile(path, "w") as z:
-        z.writestr(f"securitywarden-{version}.dist-info/METADATA",
-                   f"Metadata-Version: 2.1\nName: securitywarden\nVersion: {version}\n")
+        z.writestr(f"aisecuritywarden-{version}.dist-info/METADATA",
+                   f"Metadata-Version: 2.1\nName: aisecuritywarden\nVersion: {version}\n")
         z.writestr("securitywarden/__init__.py", f'__version__ = "{version}"\n')
     return str(path)
 
@@ -167,7 +167,7 @@ def test_install_runs_pip_on_the_checked_wheel_in_this_environment(tmp_path):
     def run(cmd, **kw):
         calls.append(cmd)
         return R()
-    msg = update.install("/tmp/securitywarden-0.7.0-py3-none-any.whl", "0.7.0", run=run, windows=False)
+    msg = update.install("/tmp/aisecuritywarden-0.7.0-py3-none-any.whl", "0.7.0", run=run, windows=False)
     assert "0.7.0 is installed" in msg and "Restart" in msg
     assert calls[0][1:4] == ["-m", "pip", "install"] and calls[0][-1].endswith(".whl")
 
@@ -194,7 +194,7 @@ class FakeUpdater:
 
     def download(self, client, info, *, want_version=None, want_sha256=None):
         assert (want_version, want_sha256) == (info.latest, info.sha256)
-        return "/tmp/securitywarden-0.7.0-py3-none-any.whl"
+        return "/tmp/aisecuritywarden-0.7.0-py3-none-any.whl"
 
     def install(self, wheel, version):
         self.installed.append((wheel, version))
@@ -237,7 +237,7 @@ def test_update_asks_the_owner_then_installs_exactly_the_approved_release():
     server.decide(rid, True)
     done = hub.call(Hub.CHECK_TOOL, {"request_id": rid})
     assert not done.is_error and "installed" in done.text
-    assert upd.installed == [("/tmp/securitywarden-0.7.0-py3-none-any.whl", "0.7.0")]
+    assert upd.installed == [("/tmp/aisecuritywarden-0.7.0-py3-none-any.whl", "0.7.0")]
 
 
 def test_the_agent_cant_pick_a_version_and_denied_updates_do_nothing():
@@ -289,7 +289,7 @@ def test_waiting_results_stay_plain_json():
 
 def test_sw_mcp_update_check_from_the_command_line(tmp_path, key, capsys, monkeypatch):
     _pem, keys = key
-    offer = _offer(tmp_path, key, "0.7.0")
+    offer = _offer(tmp_path, key, "9.0.0")              # newer than whatever this client is
     monkeypatch.setattr(release, "TRUSTED_KEYS", keys)
     monkeypatch.setattr(update, "install_problem", lambda: None)
     assert update.run_cli(offer, check_only=True, yes=False, prog="sw-mcp") == 2
@@ -299,4 +299,4 @@ def test_sw_mcp_update_check_from_the_command_line(tmp_path, key, capsys, monkey
     monkeypatch.setattr(update, "updates_dir", lambda: str(tmp_path / "u"))
     assert update.run_cli(offer, check_only=False, yes=False, prog="sw-mcp", ask=lambda q: "n") == 1
     assert update.run_cli(offer, check_only=False, yes=True, prog="sw-mcp") == 0
-    assert installed == ["0.7.0"]
+    assert installed == ["9.0.0"]

@@ -1,4 +1,4 @@
-# Using SecurityWarden with Hermes Agent
+# Using aiSecurityWarden with Hermes Agent
 
 Hermes can load secrets from any CLI vault through its
 [command helper](https://hermes-agent.nousresearch.com/docs/user-guide/secrets/command):
@@ -20,7 +20,7 @@ Use one project and one token per bot/profile. Each token can then only read tha
 ## 2. Install on the agent box
 
 ```bash
-pipx install securitywarden          # or: python3 -m venv ~/.venvs/sw && ~/.venvs/sw/bin/pip install securitywarden
+pipx install aisecuritywarden        # or: python3 -m venv ~/.venvs/sw && ~/.venvs/sw/bin/pip install aisecuritywarden
 umask 077 && mkdir -p ~/.config/securitywarden
 echo 'sw1.m....' > ~/.config/securitywarden/token
 sudo install -m 755 securitywarden-helper.sh /usr/local/bin/securitywarden-helper
@@ -37,7 +37,7 @@ secrets:
     command: "/usr/local/bin/securitywarden-helper"
     helper_timeout_seconds: 10   # default is 3s; leave room for TLS + Argon2 on the server
                                  # with an approval policy: more than its timeout, e.g. 150
-    override_existing: true      # let SecurityWarden be the rotation authority over .env
+    override_existing: true      # let aiSecurityWarden be the rotation authority over .env
 
 mcp_servers:
   webull:

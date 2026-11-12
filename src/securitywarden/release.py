@@ -2,8 +2,8 @@
 
 A release is a client wheel plus a ``.swrel`` file next to it::
 
-    {"manifest": {"format": "swrel1", "package": "securitywarden", "version": "0.6.0",
-                  "file": "securitywarden-0.6.0-py3-none-any.whl", "sha256": "...", "size": 123456,
+    {"manifest": {"format": "swrel1", "package": "aisecuritywarden", "version": "0.7.0",
+                  "file": "aisecuritywarden-0.7.0-py3-none-any.whl", "sha256": "...", "size": 123456,
                   "published": "2026-11-11T12:00:00Z", "notes": "What changed, in a line or two."},
      "key_id": "...", "signature": "..."}
 
@@ -12,9 +12,9 @@ only if the signature checks out with a key in :data:`TRUSTED_KEYS`, the wheel's
 version is newer than the installed one (no downgrades). See DESIGN.md "Client updates".
 
     python -m securitywarden.release keygen --out release-key.pem      # once; prints the public key
-    python -m securitywarden.release sign dist/securitywarden-0.6.0-py3-none-any.whl --key release-key.pem \\
+    python -m securitywarden.release sign dist/aisecuritywarden-0.7.0-py3-none-any.whl --key release-key.pem \\
         --notes "Client updates from the MCP server"
-    python -m securitywarden.release verify dist/securitywarden-0.6.0-py3-none-any.whl.swrel
+    python -m securitywarden.release verify dist/aisecuritywarden-0.7.0-py3-none-any.whl.swrel
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from typing import Any
 from . import crypto
 
 FORMAT = "swrel1"
-PACKAGE = "securitywarden"
+PACKAGE = "aisecuritywarden"          # the name it installs under (pip install aisecuritywarden)
 EXTENSION = ".swrel"
 MAX_WHEEL = 50 * 1024 * 1024
 MAX_NOTES = 2000
@@ -128,9 +128,9 @@ def check_wheel(m: dict[str, Any], data: bytes) -> None:
 def _wheel_version(path: str) -> str:
     """The version in the wheel's own METADATA (so a renamed file can't be signed as another version)."""
     with zipfile.ZipFile(path) as z:
-        meta = [n for n in z.namelist() if re.fullmatch(r"securitywarden-[^/]+\.dist-info/METADATA", n)]
+        meta = [n for n in z.namelist() if re.fullmatch(r"aisecuritywarden-[^/]+\.dist-info/METADATA", n)]
         if len(meta) != 1:
-            raise ReleaseError(f"{path} isn't a securitywarden wheel")
+            raise ReleaseError(f"{path} isn't an aisecuritywarden wheel")
         for line in z.read(meta[0]).decode("utf-8").splitlines():
             if line.startswith("Version:"):
                 return line.split(":", 1)[1].strip()

@@ -1,4 +1,4 @@
-"""sw-mcp: run SecurityWarden connectors as an MCP server for an AI agent (Hermes, Claude Desktop, ...).
+"""sw-mcp: run aiSecurityWarden connectors as an MCP server for an AI agent (Hermes, Claude Desktop, ...).
 
     sw-mcp serve --connector gmail                  # stdio MCP server; SW_SERVER_URL + SW_ACCESS_TOKEN_FILE
     sw-mcp serve --config ~/.config/sw/mcp.json
@@ -9,7 +9,7 @@
     sw-mcp pack notes                                # pack a connector to upload on the website
     sw-mcp update [--check]                          # install the newest signed aiSecurityWarden client
 
-Connectors turned on for the token's project on the SecurityWarden website (Connectors) are loaded too, and
+Connectors turned on for the token's project on the aiSecurityWarden website (Connectors) are loaded too, and
 updated while running when uploaded with "go live now" (SW_MCP_REMOTE=0 turns this off).
 
 Config file (JSON; every key optional, environment variables and options win):
@@ -74,7 +74,7 @@ def load_connector(ref: str) -> type[Connector]:
     except (ImportError, AttributeError) as e:
         _die(f"can't load connector {ref!r}: {e}")
     if not (isinstance(cls, type) and issubclass(cls, Connector) and cls.name):
-        _die(f"{ref!r} is not a SecurityWarden connector")
+        _die(f"{ref!r} is not an aiSecurityWarden connector")
     return cls
 
 
@@ -96,7 +96,7 @@ def _config(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _connectors(args: argparse.Namespace, cfg: dict[str, Any]) -> list[type[Connector]]:
-    """Connectors named in the MCP settings. Those turned on for the token's project on the SecurityWarden
+    """Connectors named in the MCP settings. Those turned on for the token's project on the aiSecurityWarden
     website are added on top (see remote.py)."""
     refs = args.connector or (os.environ.get("SW_MCP_CONNECTORS", "").split(",") if os.environ.get("SW_MCP_CONNECTORS")
                               else cfg.get("connectors") or [])
@@ -259,7 +259,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
               "sw-mcp setup", file=sys.stderr, flush=True)
     hub.refresh(force=True)            # connectors turned on for the token's project on the website
     if not hub.tools and hub.client is not None:
-        print("sw-mcp: no connectors yet: turn one on for this token's project on the SecurityWarden website "
+        print("sw-mcp: no connectors yet: turn one on for this token's project on the aiSecurityWarden website "
               "(Connectors), or name one with --connector", file=sys.stderr, flush=True)
     print(f"sw-mcp {__version__}: serving {', '.join(i.name for i in hub.instances)} "
           f"({len(hub.tools)} tools) on stdio", file=sys.stderr, flush=True)
@@ -608,7 +608,7 @@ def cmd_proxy_init(args: argparse.Namespace) -> None:
 
 
 def cmd_pack(args: argparse.Namespace) -> None:
-    """Pack a connector into one file to upload on the SecurityWarden website (Connectors)."""
+    """Pack a connector into one file to upload on the aiSecurityWarden website (Connectors)."""
     cls = load_connector(args.connector_name)
     try:
         bundle = pack(cls)
@@ -619,7 +619,7 @@ def cmd_pack(args: argparse.Namespace) -> None:
     with open(out, "wb") as f:
         f.write(raw)
     print(f"wrote {out}: connector {cls.name}, {len(bundle['files'])} files, {len(raw) / 1024:.1f} KB, "
-          f"{len(bundle['tools'])} tools.\nUpload it on the SecurityWarden website: Connectors > Upload, then turn "
+          f"{len(bundle['tools'])} tools.\nUpload it on the aiSecurityWarden website: Connectors > Upload, then turn "
           "it on for the projects whose agents should have it.")
 
 
@@ -706,7 +706,7 @@ def cmd_login(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(prog="sw-mcp", description="SecurityWarden connectors as an MCP server")
+    p = argparse.ArgumentParser(prog="sw-mcp", description="aiSecurityWarden connectors as an MCP server")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -761,7 +761,7 @@ def main(argv: list[str] | None = None) -> None:
     pi.add_argument("-o", "--output", help="file to write (default: NAME.swproxy)")
     pi.add_argument("--force", action="store_true", help="replace the file if it exists")
     pi.set_defaults(fn=cmd_proxy_init)
-    pk = sub.add_parser("pack", help="pack a connector into one file to upload on the SecurityWarden website")
+    pk = sub.add_parser("pack", help="pack a connector into one file to upload on the aiSecurityWarden website")
     pk.add_argument("connector_name", help="installed connector name, or package.module:ClassName")
     pk.add_argument("-o", "--output", help=f"file to write (default: NAME{EXTENSION})")
     pk.set_defaults(fn=cmd_pack)

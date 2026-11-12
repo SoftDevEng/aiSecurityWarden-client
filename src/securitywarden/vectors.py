@@ -425,7 +425,7 @@ def build() -> dict[str, Any]:
                       crypto.format_setup_code(ssec)[:-1] + "1", crypto.format_setup_code(ssec) + "A"],
         "must_fail": [{"why": "another code", "secret_hex": other.hex(), "blob": sblob2}],
     }
-    # connectors stored in SecurityWarden
+    # connectors stored in aiSecurityWarden
     ckey, cid, uid = key("connector/key"), crypto.b64e(key("connector/id")[:16]), crypto.b64e(key("user")[:16])
     acct = key("account-key")
     bundle = {"format": "sw-connector-1", "name": "notes", "title": "Notes ✓", "entry": "sw_connector_notes.connector:Notes",

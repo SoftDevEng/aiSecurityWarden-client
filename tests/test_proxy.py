@@ -31,7 +31,7 @@ def mapping(**over):
 
 @pytest.fixture
 def run(tmp_path, monkeypatch):
-    """A hub with the fake upstream (a real child process) behind the fake SecurityWarden."""
+    """A hub with the fake upstream (a real child process) behind the fake aiSecurityWarden."""
     log = tmp_path / "calls.jsonl"
     monkeypatch.setenv("FAKE_LOG", str(log))
     monkeypatch.setenv("SW_ACCESS_TOKEN_FILE", "/secret/path")

@@ -1,9 +1,9 @@
-# Writing a SecurityWarden connector
+# Writing an aiSecurityWarden connector
 
 A connector gives an AI agent (Hermes, Claude, any MCP client) tools for one application: a mail service, a
-CRM, a broker, a home-automation API. `sw-mcp` runs it as an MCP server. What makes it a SecurityWarden
-connector: **every tool call is an action that the user's SecurityWarden rules allow, refuse, or hold for a
-person to approve**, and the application's credentials come from SecurityWarden, never from files or the AI.
+CRM, a broker, a home-automation API. `sw-mcp` runs it as an MCP server. What makes it an aiSecurityWarden
+connector: **every tool call is an action that the user's aiSecurityWarden rules allow, refuse, or hold for a
+person to approve**, and the application's credentials come from aiSecurityWarden, never from files or the AI.
 
 This guide is the contract. It is written so that an AI can build a correct connector from it alone.
 
@@ -27,7 +27,7 @@ Then replace the example tools in `src/sw_connector_notes/connector.py`, update 
 1. The agent calls a tool, e.g. `notes_delete(item_id="a1")`.
 2. `sw-mcp` checks the arguments against the tool's schema, then calls your method. Your method **prepares**:
    it validates, looks up whatever it needs, and returns a `Plan(args, summary, run)`. It changes nothing.
-3. `sw-mcp` asks SecurityWarden whether this token may do the action `notes.delete` with exactly `args`
+3. `sw-mcp` asks aiSecurityWarden whether this token may do the action `notes.delete` with exactly `args`
    (a SHA-256 digest of them). The rules answer:
    - allowed: `run(args)` is called now and its result goes to the agent;
    - a person must decide: the agent is told `waiting_for_approval` immediately; the person sees your
@@ -49,7 +49,7 @@ class Notes(Connector):
     name = "notes"                         # lowercase; prefixes every action (notes.*) and tool (notes_*)
     title = "Notes"                        # the name people see
     description = "Read and manage notes in Notes."
-    secrets = ("NOTES_API_KEY",)           # every SecurityWarden secret this connector reads
+    secrets = ("NOTES_API_KEY",)           # every aiSecurityWarden secret this connector reads
     suggested_rules = ("notes.read.*=allow", "notes.update=window:30m", "notes.delete=each")
     transport = None                       # tests swap the real service for httpx.MockTransport
 
@@ -61,9 +61,9 @@ class Notes(Connector):
         self.http.close()
 ```
 
-- `name` never changes once people use it: their SecurityWarden rules refer to `notes.*`.
+- `name` never changes once people use it: their aiSecurityWarden rules refer to `notes.*`.
 - `secrets`: UPPER_CASE names, prefixed with the connector name. The user stores them in the token's
-  SecurityWarden project. Read them only with `self.secret("NOTES_API_KEY")`.
+  aiSecurityWarden project. Read them only with `self.secret("NOTES_API_KEY")`.
 - One connector per application. Several connectors can run in one `sw-mcp` (`--connector a --connector b`).
 
 ## 4. Tools
@@ -230,15 +230,15 @@ Install the package into the same Python environment as `sw-mcp` (`pip install .
 `--connector notes` works, `sw-mcp tools` lists it, and `sw-mcp check` checks it. Without packaging, a
 connector can also be named directly: `--connector mymodule:Notes` (the module must be importable).
 
-Or, with no installing on each machine: upload it to SecurityWarden (next section).
+Or, with no installing on each machine: upload it to aiSecurityWarden (next section).
 
-## 13. Distributing it through SecurityWarden (no pip on the agents' machines)
+## 13. Distributing it through aiSecurityWarden (no pip on the agents' machines)
 
 ```bash
 sw-mcp pack notes                  # writes notes.swconnector (refuses a connector that fails sw-mcp check)
 ```
 
-On the SecurityWarden website: **Connectors > Upload...**, check the tools and risks shown, make it available to
+On the aiSecurityWarden website: **Connectors > Upload...**, check the tools and risks shown, make it available to
 the projects that need it, then tick it for each token whose agent should have it. Every `sw-mcp` using such a
 token loads it, with no `--connector` needed. Tools whose actions the token's rules `deny` are left out of the
 list the agent sees. Uploading a newer `notes.swconnector` stores the next version (the one it replaces is kept
@@ -256,13 +256,13 @@ than one they have already run.
 
 ## 14. Using it
 
-1. SecurityWarden website: a project with the connector's secrets; make the connector available to the project
+1. aiSecurityWarden website: a project with the connector's secrets; make the connector available to the project
    (Connectors); a token for the agent with the connector ticked and the suggested rules (token → Manage). Or
    install the package where the agent runs and name it in the MCP settings (`--connector notes`).
 2. The agent's MCP settings: command `sw-mcp`, arguments `serve`, environment `SW_SERVER_URL` and
    `SW_TOKEN_ID` and `SW_TOKEN_NAME` (the website shows both when you create the token; it's kept in
    SW_Tokens.json once set up).
-3. Give the agent the token's setup code: "Set up SecurityWarden with code SWS1-...".
+3. Give the agent the token's setup code: "Set up aiSecurityWarden with code SWS1-...".
 4. Try a tool by hand: `sw-mcp call notes_search query=shopping`.
 
 ## 15. Checklist (before calling it done)
@@ -275,7 +275,7 @@ than one they have already run.
 - [ ] Outside text is returned with `untrusted(...)`.
 - [ ] No secret appears in args, summaries, results, errors or logs.
 - [ ] Tell the user which secrets to add and the suggested rules.
-- [ ] To share it through SecurityWarden: `sw-mcp pack NAME` works (only the standard library, httpx and
+- [ ] To share it through aiSecurityWarden: `sw-mcp pack NAME` works (only the standard library, httpx and
       cryptography are used).
 
 ## 16. A complete example

@@ -323,7 +323,7 @@ class SecurityWardenClient:
             self._action_cfg = cfg
         return self._action_cfg
 
-    # -- machine: connectors stored in SecurityWarden (see DESIGN.md "Connector distribution") --
+    # -- machine: connectors stored in aiSecurityWarden (see DESIGN.md "Connector distribution") --
 
     def connectors(self) -> dict[str, Any]:
         """The connectors chosen for this token: {"builtin": [names], "custom": [{"id", "version",
@@ -463,7 +463,7 @@ class SecurityWardenClient:
 
     def download_client_release(self, file: str, *, limit: int = 50 * 1024 * 1024) -> bytes:
         """The bytes of one release file (a wheel named in a signed manifest). Checked by the caller."""
-        if not re.fullmatch(r"securitywarden-[0-9A-Za-z.]+-py3-none-any\.whl", file):
+        if not re.fullmatch(r"aisecuritywarden-[0-9A-Za-z.]+-py3-none-any\.whl", file):
             raise SecurityWardenError("not a client release file name")
         r = self._req("GET", f"/v1/client/releases/{file}")
         if len(r.content) > limit:
@@ -633,7 +633,7 @@ class SecurityWardenClient:
         self._require_admin()
         self._req("DELETE", f"/v1/admin/tokens/{token_id}")
 
-    # -- admin: connectors stored in SecurityWarden (the operator's own; accounts use the website) --
+    # -- admin: connectors stored in aiSecurityWarden (the operator's own; accounts use the website) --
 
     def list_connectors(self) -> dict[str, Any]:
         """{"builtin": [...], "custom": [{..., "meta": decrypted}], "limits": {...}}."""

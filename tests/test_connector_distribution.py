@@ -1,4 +1,4 @@
-"""Connectors stored in SecurityWarden: crypto, bundles, loading from memory, live updates, rollback."""
+"""Connectors stored in aiSecurityWarden: crypto, bundles, loading from memory, live updates, rollback."""
 
 import io
 import json
@@ -141,7 +141,7 @@ def test_load_from_memory_and_replace_with_a_new_version():
         load_bundle(dict(memo_bundle(1), files={"pytest/__init__.py": ""}, entry="pytest:Memo"), "c3@1")
 
 
-# -- sw-mcp picking connectors up from SecurityWarden -----------------------------------------------
+# -- sw-mcp picking connectors up from aiSecurityWarden -----------------------------------------------
 
 def hub_for(sw, tmp_path, *, clock=None):
     t = [0.0]
@@ -228,7 +228,7 @@ def test_builtin_connectors_turned_on_in_securitywarden(tmp_path):
     logs = []
     hub = Hub(sw, [], source=RemoteConnectors({"gmail": lambda: Gmail}, str(tmp_path / "v.json")), log=logs.append)
     assert "gmail_send" in {x["name"] for x in hub.list_tools()}
-    assert any("update the SecurityWarden client" in m for m in logs)
+    assert any("update the aiSecurityWarden client" in m for m in logs)
 
 
 def test_the_agent_is_told_when_tools_change(tmp_path):
