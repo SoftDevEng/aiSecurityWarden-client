@@ -237,7 +237,7 @@ def test_update_asks_the_owner_then_installs_exactly_the_approved_release():
     rid = r.data["request_id"]
     req = server.requests[rid]
     assert req["action"] == "securitywarden.update" and req["risk"] == "high"
-    assert "0.7.0" in req["summary"]["title"]
+    assert req["summary"]["title"].startswith("Update aiSecurityWarden to 0.7.0 on ")   # version before the host
     assert dict(req["summary"]["fields"])["New version"] == "0.7.0"
     assert upd.installed == []
     server.decide(rid, True)

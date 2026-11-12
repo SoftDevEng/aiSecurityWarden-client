@@ -305,7 +305,9 @@ def test_a_waiting_tool_approval_is_finished_by_the_next_sw_mcp_process(tmp_path
     assert names(first) == {"check_approval"}
     first.close()
     pending = tmp_path / "cfg" / "securitywarden" / "proxy-pending" / "tok_abcdefgh-gh.json"
-    assert pending.exists() and oct(pending.stat().st_mode & 0o777) == "0o600"
+    assert pending.exists()
+    if os.name == "posix":                                    # Windows has no owner-only file modes
+        assert oct(pending.stat().st_mode & 0o777) == "0o600"
     sw.approve(next(k for k, r in sw.requests.items() if r["action"] == "gh.tools.approve"))
     ProxyConnector._bound.clear()                             # a new process: nothing in memory
     second = make_hub(proxy_class(mapping()), sw)
@@ -384,7 +386,9 @@ def test_a_denied_tool_change_is_not_asked_again_after_a_restart(tmp_path, monke
     assert "gh_echo" not in names(first)
     first.close()
     denied = tmp_path / "cfg" / "securitywarden" / "proxy-denied" / "tok_abcdefgh-gh.json"
-    assert denied.exists() and oct(denied.stat().st_mode & 0o777) == "0o600"
+    assert denied.exists()
+    if os.name == "posix":                                    # Windows has no owner-only file modes
+        assert oct(denied.stat().st_mode & 0o777) == "0o600"
     ProxyConnector._bound.clear()                             # a new process: nothing in memory
     second = make_hub(proxy_class(mapping()), sw)
     try:
