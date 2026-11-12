@@ -1,12 +1,15 @@
 # aiSecurityWarden client
 
-The open-source client for **aiSecurityWarden**, a secrets service with **scoped, revocable machine tokens**
-and **end-to-end encryption**. Built so AI agents (like [Hermes Agent](https://hermes-agent.nousresearch.com))
-and other unattended services can fetch API keys at startup without ever storing those keys on disk.
+The open-source client for **[aiSecurityWarden](https://aisecuritywarden.com)**, a secrets service with **scoped,
+revocable machine tokens**, **end-to-end encryption** and **human approval** for AI agents. Built so AI agents
+(like [Hermes Agent](https://hermes-agent.nousresearch.com)) and other unattended services can fetch API keys at
+startup without ever storing those keys on disk.
 
 All encryption and decryption happens here, in the client. The server only ever receives ciphertext,
 proofs it keeps only as Argon2id hashes, and wrapped keys, so you can check what leaves your machine by
 reading this code.
+
+Get an account and see how it works at **[aisecuritywarden.com](https://aisecuritywarden.com)**.
 
 This repository contains:
 
