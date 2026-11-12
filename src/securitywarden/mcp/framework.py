@@ -740,7 +740,7 @@ class Hub:
         import platform
         host = platform.node() or "this machine"
         args = {"version": info.latest, "sha256": info.sha256, "installed": info.installed, "host": host}
-        summary = Summary(f"Update aiSecurityWarden on {host} to {info.latest}",
+        summary = Summary(f"Update aiSecurityWarden to {info.latest} on {host}",   # version first: long names get cut
                           [("Machine", host), ("Installed", info.installed), ("New version", str(info.latest)),
                            ("SHA-256", f"{info.sha256[:16]}…" if info.sha256 else "?"),
                            ("Required by server", "yes" if info.required else "no")],
