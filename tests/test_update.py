@@ -16,6 +16,12 @@ from test_mcp import FakeServer, Notes
 PASS = b"correct horse battery"
 
 
+@pytest.fixture(autouse=True)
+def _nothing_newer_on_disk(monkeypatch):
+    """These tests say which version is installed; the real one on disk (this dev install) doesn't count."""
+    monkeypatch.setattr(update, "disk_version", lambda: None)
+
+
 @pytest.fixture(scope="module")
 def key():
     pem, pub = crypto.new_release_key(PASS)
@@ -300,3 +306,41 @@ def test_sw_mcp_update_check_from_the_command_line(tmp_path, key, capsys, monkey
     assert update.run_cli(offer, check_only=False, yes=False, prog="sw-mcp", ask=lambda q: "n") == 1
     assert update.run_cli(offer, check_only=False, yes=True, prog="sw-mcp") == 0
     assert installed == ["9.0.0"]
+
+
+# -- installed while running: restart to use it ---------------------------------------------------
+
+def test_an_update_installed_while_running_says_restart_not_available(tmp_path, key):
+    _pem, keys = key
+    offer = _offer(tmp_path, key, "0.7.1")
+    info = update.check(offer, installed="0.7.0", keys=keys, problem=lambda: None, on_disk=lambda: "0.7.1")
+    assert not info.available and info.restart_needed and not info.required
+    assert info.text().startswith("aiSecurityWarden 0.7.1 is installed; restart") and "still runs 0.7.0" in info.text()
+    d = info.as_dict()
+    assert d["restart_needed"] and d["installed_on_disk"] == "0.7.1" and not d["update_available"]
+    with pytest.raises(release.ReleaseError):
+        update.download(offer, info, keys=keys, folder=str(tmp_path / "u"))
+    # a still newer release is offered against what's on disk, and says a restart is pending too
+    newer = _offer(tmp_path, key, "0.7.2")
+    info = update.check(newer, installed="0.7.0", keys=keys, problem=lambda: None, on_disk=lambda: "0.7.1")
+    assert info.available and "0.7.1 -> 0.7.2" in info.text() and "restart" in info.text()
+    # an older or equal version on disk changes nothing
+    info = update.check(offer, installed="0.7.0", keys=keys, problem=lambda: None, on_disk=lambda: "0.7.0")
+    assert info.available and not info.restart_needed
+
+
+def test_after_the_agent_installs_it_says_restart_and_doesnt_ask_again():
+    server, upd = FakeServer(), FakeUpdater(_info())
+    hub = Hub(server, [Notes], updater=upd)
+    rid = hub.call(Hub.UPDATE_TOOL, {}).data["request_id"]
+    server.decide(rid, True)
+    assert "installed" in hub.call(Hub.CHECK_TOOL, {"request_id": rid}).text
+    # the files on disk may not have changed yet (Windows installs once this program stops)
+    r = hub.call(Hub.CHECK_UPDATE_TOOL, {})
+    assert "installs when this program stops" in r.text and r.data["restart_needed"] and not r.data["update_available"]
+    again = hub.call(Hub.UPDATE_TOOL, {})
+    assert "already installed" in again.text and not again.is_error and len(server.requests) == 1
+    assert upd.installed == [("/tmp/aisecuritywarden-0.7.0-py3-none-any.whl", "0.7.0")]
+    hub2 = Hub(FakeServer({"notes.read.note": "allow"}), [Notes], updater=upd)
+    hub2._update_installed = "0.7.0"
+    assert "client update" not in hub2.call("notes_read", {"id": "n1"}).text     # no "update available" notice

@@ -316,6 +316,7 @@ class Hub:
         self._update_checked_at: float | None = None
         self._update_note: str | None = None
         self._update_noted = False
+        self._update_installed: str | None = None   # installed by this process (Windows: once it exits)
         self.setup = setup
         self.offer_setup = setup is not None      # first setup, and a new token after the old one was revoked
         self.ctx = Context(client)
@@ -711,6 +712,11 @@ class Hub:
         self._noted(info)
         data = info.as_dict()
         text = info.text()
+        if self._update_installed and info.latest == self._update_installed and not info.restart_needed:
+            # Windows: it installs once this program stops; the files on disk are still the old version
+            text = (f"aiSecurityWarden {self._update_installed} was downloaded and installs when this program stops: "
+                    "restart the agent app (or its MCP servers) to use it.")
+            data = {**data, "update_available": False, "restart_needed": True}
         if info.available and not info.problem:
             text += " To install it, call securitywarden_update (the user approves it in aiSecurityWarden)."
         return Result(text, False, data)
@@ -724,6 +730,9 @@ class Hub:
             raise
         except (SecurityWardenError, ReleaseError) as e:
             return Result(f"Couldn't check for aiSecurityWarden updates: {_short(e)}.", True)
+        if self._update_installed and info.latest == self._update_installed:
+            return Result(f"aiSecurityWarden {self._update_installed} is already installed (or installs when this "
+                          "program stops). Restart the agent app (or its MCP servers) to use it. Nothing to do.")
         if not info.available:
             return Result(info.text() + " Nothing to install.", info.problem is not None)
         if info.problem:
@@ -743,6 +752,7 @@ class Hub:
             wheel = updater.download(client, fresh, want_version=a["version"], want_sha256=a["sha256"])
             msg = updater.install(wheel, a["version"])
             self._update_note, self._update_noted = None, True
+            self._update_installed = a["version"]
             return msg
 
         plan = Plan(args, summary, run)
@@ -754,7 +764,7 @@ class Hub:
 
     def _noted(self, info: Any) -> None:
         self._update_checked_at = self.clock()
-        if info.available:
+        if info.available and info.latest != self._update_installed:
             self._update_note = (f"[aiSecurityWarden] A client update is {'REQUIRED' if info.required else 'available'}"
                                  f" ({info.installed} -> {info.latest}). Tell the user; if they want it, call "
                                  "securitywarden_update.")

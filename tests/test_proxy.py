@@ -369,3 +369,26 @@ def test_drafts_make_risky_names_high_and_cut_long_names_at_a_word():
     assert risks == {"merge_pull_request": "high", "push_files": "high", "create_repository": "high",
                      "sendEmail": "high", "issue_write": "medium", "get_merged_stats": "medium"}
     assert dict((r[0], r[3]) for r in report)["sendEmail"] == "no hint from the server; its name says 'send'"
+
+
+def test_a_denied_tool_change_is_not_asked_again_after_a_restart(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setenv("FAKE_LOG", str(tmp_path / "log"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    sw = FakeSecurityWarden({"gh.*": "allow"}, secrets={"GITHUB_PAT": "ghp_test"}, pins=True)
+    sw.cred = SimpleNamespace(id="tok_abcdefgh")
+    first = make_hub(proxy_class(mapping()), sw)
+    type(first.instances[0]).PIN_POLL = 0
+    assert names(first) == {"check_approval"}
+    sw.deny(next(k for k, r in sw.requests.items() if r["action"] == "gh.tools.approve"))
+    assert "gh_echo" not in names(first)
+    first.close()
+    denied = tmp_path / "cfg" / "securitywarden" / "proxy-denied" / "tok_abcdefgh-gh.json"
+    assert denied.exists() and oct(denied.stat().st_mode & 0o777) == "0o600"
+    ProxyConnector._bound.clear()                             # a new process: nothing in memory
+    second = make_hub(proxy_class(mapping()), sw)
+    try:
+        assert "gh_echo" not in names(second)                 # still hidden...
+        assert sum(r["action"] == "gh.tools.approve" for r in sw.requests.values()) == 1    # ...and not asked again
+    finally:
+        second.close()

@@ -506,7 +506,10 @@ Each upstream tool's fingerprint is SHA-256 of canonical JSON `{"name", "descrip
 `{"fingerprints": <the full sorted list>}`, and stores the list with `POST /v1/proxy-pins/<name>`
 `{"request_id", "nonce", "fingerprints"}`: the server accepts it only by using up an approved request of that action
 whose digest is exactly that list's (202 while pending, 403 when denied). So neither the machine nor the server can
-approve tool changes alone. A denied list isn't asked about again until the upstream's tools change once more.
+approve tool changes alone. A denied list isn't asked about again until the upstream's tools change once more,
+also after a restart (0.7.2): its fingerprints are kept in `proxy-denied/<token id>-<name>.json` next to the waiting
+requests (`proxy-pending/`), mode 600. Deleting that file only means being asked again; writing one only keeps tools
+hidden, so it can't offer a tool nobody approved.
 
 ## Connector distribution
 
@@ -623,7 +626,10 @@ plain JSON), and a failed check never fails the tool call.
 it is the approval. `--check` exits 2 when an update is available. `sw-mcp doctor` reports the client version.
 
 After an update the agent app (or its MCP servers) must be restarted; until then the running process keeps the
-old code.
+old code. From 0.7.2 the check compares the running version with
+the one installed on disk: once a newer one is installed (by the agent, `sw-mcp update`, pipx or pip), it says
+"aiSecurityWarden 0.7.1 is installed; restart the agent app to use it" instead of offering the update again, the
+notice stops, and `securitywarden_update` doesn't ask the owner to approve the same release twice.
 
 ## Setup codes
 
