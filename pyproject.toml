@@ -39,7 +39,9 @@ gmail = "securitywarden.mcp.gmail:Gmail"
 swadmin = "securitywarden.client.gui:main"
 
 [project.urls]
-Homepage = "https://github.com/SoftDevEng/aiSecurityWarden-client"
+Homepage = "https://aisecuritywarden.com"
+"Sign up" = "https://app.aisecuritywarden.com"
+Source = "https://github.com/SoftDevEng/aiSecurityWarden-client"
 Issues = "https://github.com/SoftDevEng/aiSecurityWarden-client/issues"
 
 [tool.hatch.version]
