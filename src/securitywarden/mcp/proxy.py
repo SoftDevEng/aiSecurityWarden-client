@@ -717,13 +717,43 @@ class ProxyConnector(Connector):
     # and whichever process runs next finishes it. The nonce alone can't approve anything: the server only stores
     # a list a person approved, for exactly that list.
     @classmethod
-    def _pending_path(cls) -> str | None:
+    def _pending_path(cls, folder: str = "proxy-pending") -> str | None:
         cred = getattr(cls._client, "cred", None)
         cid = getattr(cred, "id", None)
         if not isinstance(cid, str) or not re.match(r"^[A-Za-z0-9_-]{8,64}$", cid):
             return None
         base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-        return os.path.join(base, "securitywarden", "proxy-pending", f"{cid}-{cls.name}.json")
+        return os.path.join(base, "securitywarden", folder, f"{cid}-{cls.name}.json")
+
+    # A denied tool list is remembered on this machine (fingerprints only), so the owner isn't asked about the same
+    # change again after every restart. Losing or deleting the file only means being asked again; writing one only
+    # keeps those tools hidden: neither can offer a tool nobody approved.
+    @classmethod
+    def _load_denied(cls) -> list[str] | None:
+        path = cls._pending_path("proxy-denied")
+        try:
+            with open(path, encoding="utf-8") as f:            # type: ignore[arg-type]
+                d = json.load(f)
+            fps = d.get("fps") if isinstance(d, dict) else None
+            if isinstance(fps, list) and all(isinstance(x, str) for x in fps):
+                return fps
+        except (OSError, ValueError, TypeError):
+            pass
+        return None
+
+    @classmethod
+    def _save_denied(cls, fps: list[str]) -> None:
+        path = cls._pending_path("proxy-denied")
+        if not path:
+            return
+        try:
+            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+            fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"fps": fps}, f)
+            os.replace(path + ".tmp", path)
+        except OSError:
+            pass
 
     @classmethod
     def _load_pending(cls) -> dict[str, Any] | None:
@@ -795,6 +825,8 @@ class ProxyConnector(Connector):
                     cls._save_pending(None)
                     cls._log(f"{cls.name}: tool changes approved")
                 return
+            if cls._pin_denied is None:
+                cls._pin_denied = cls._load_denied()     # denied by an earlier sw-mcp process
             if fps == cls._pin_denied:
                 return
             new = [t for t in offered if tool_fingerprint(t) not in cls.approved]
@@ -817,6 +849,7 @@ class ProxyConnector(Connector):
             cls._save_pending(None)
             if e.reason == "approval_denied":
                 cls._pin_denied = fps
+                cls._save_denied(fps)
                 cls._log(f"{cls.name}: tool changes denied; they stay hidden until the list changes")
             else:                        # expired, cancelled, used: ask again next time
                 cls._log(f"{cls.name}: the tool approval request ended ({e.reason}); asking again")

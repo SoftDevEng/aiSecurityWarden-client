@@ -831,6 +831,15 @@
   "github.repo.*=each",
   "github.actions.*=each",
   "github.security.*=each",
+  "github.pr.create=each",
+  "github.pr.update=each",
+  "github.pr.update_branch=each",
+  "github.branch.create=window:30m",
+  "github.label.write=window:30m",
+  "github.project.write=window:30m",
+  "github.discussion.comment=window:30m",
+  "github.gist.write=each",
+  "github.copilot.assign=each",
   "github.unmapped.*=each",
   "github.*=each"
  ]

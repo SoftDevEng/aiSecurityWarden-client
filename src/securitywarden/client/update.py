@@ -49,22 +49,37 @@ class UpdateInfo:
     required: bool = False            # the server no longer supports this client's version
     problem: str | None = None        # why it can't be installed from here (dev install, no pip, bad signature...)
     doc: dict[str, Any] | None = field(default=None, repr=False)   # the verified .swrel document
+    on_disk: str | None = None        # a newer version already installed, which this process isn't running yet
+
+    @property
+    def restart_needed(self) -> bool:
+        return self.on_disk is not None
+
+    @property
+    def current(self) -> str:
+        """The newest version on this machine: installed on disk, else the running one."""
+        return self.on_disk or self.installed
 
     def as_dict(self) -> dict[str, Any]:
         return {"installed": self.installed, "latest": self.latest, "min_supported": self.min_supported,
                 "update_available": self.available, "update_required": self.required, "notes": self.notes,
                 "sha256": self.sha256, "can_install": self.available and not self.problem,
-                "problem": self.problem}
+                "problem": self.problem, "installed_on_disk": self.on_disk, "restart_needed": self.restart_needed}
 
     def text(self) -> str:
+        restart = (f"aiSecurityWarden {self.on_disk} is installed; restart the agent app (or its MCP servers) to use "
+                   f"it (this program still runs {self.installed}).") if self.on_disk else ""
+        if restart and not self.available:
+            return restart
         if self.latest is None and not self.problem:
             return f"aiSecurityWarden client {self.installed}: the server offers no client updates."
         if self.problem and not self.available:
             return f"aiSecurityWarden client {self.installed}: can't check for updates ({self.problem})."
         if not self.available:
             return f"aiSecurityWarden client {self.installed} is up to date."
-        out = (f"aiSecurityWarden client update {'REQUIRED' if self.required else 'available'}: "
-               f"{self.installed} -> {self.latest}.")
+        out = (f"{restart} " if restart else "") + (
+               f"aiSecurityWarden client update {'REQUIRED' if self.required else 'available'}: "
+               f"{self.current} -> {self.latest}.")
         if self.required:
             out += f" The server no longer supports clients older than {self.min_supported}."
         if self.notes:
@@ -88,10 +103,26 @@ def install_problem() -> str | None:
     return None
 
 
+def disk_version() -> str | None:
+    """The version installed on disk now (it changes when an update installs while this process runs)."""
+    try:
+        from importlib.metadata import version
+        return version("aisecuritywarden")
+    except Exception:  # noqa: BLE001 - not installed as a package
+        return None
+
+
 def check(client: Any, *, installed: str = __version__, keys: dict[str, str] | None = None,
-          problem: Callable[[], str | None] | None = None) -> UpdateInfo:
+          problem: Callable[[], str | None] | None = None,
+          on_disk: Callable[[], str | None] | None = None) -> UpdateInfo:
     """Ask the server what it offers and check the signature. Never installs anything."""
     info = UpdateInfo(installed=installed)
+    disk = (on_disk or disk_version)()
+    try:
+        if disk and is_newer(disk, installed):
+            info.on_disk = disk            # updated while running: restart to use it
+    except ValueError:
+        pass
     offer = client.client_release()
     if offer is None:
         return info                          # server older than client updates
@@ -100,7 +131,7 @@ def check(client: Any, *, installed: str = __version__, keys: dict[str, str] | N
         try:
             version_key(ms)
             info.min_supported = ms
-            info.required = version_key(installed) < version_key(ms)
+            info.required = version_key(info.current) < version_key(ms)
         except ValueError:
             pass
     doc = offer.get("release")
@@ -112,7 +143,7 @@ def check(client: Any, *, installed: str = __version__, keys: dict[str, str] | N
         info.problem = str(e)
         return info
     info.latest, info.notes, info.sha256, info.file, info.doc = m["version"], m["notes"], m["sha256"], m["file"], doc
-    info.available = is_newer(m["version"], installed)
+    info.available = is_newer(m["version"], info.current)
     if info.required and not info.available:
         info.required = False                # nothing newer to install; don't nag
     if info.available:
@@ -134,7 +165,7 @@ def download(client: Any, info: UpdateInfo, *, want_version: str | None = None, 
     m = verify(info.doc, keys)               # again: never trust an earlier check alone
     if want_version is not None and (m["version"] != want_version or m["sha256"] != want_sha256):
         raise ReleaseError("the release on offer changed after it was approved; ask again")
-    if not is_newer(m["version"], info.installed):
+    if not is_newer(m["version"], info.current):
         raise ReleaseError("refusing to install an older or equal version")
     data = client.download_client_release(m["file"])
     check_wheel(m, data)
