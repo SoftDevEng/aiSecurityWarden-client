@@ -1,11 +1,11 @@
 """Connector bundles: a connector's Python code packed into one JSON document, so it can be stored
-(encrypted) in SecurityWarden and loaded by ``sw-mcp`` on every machine that uses it, without pip.
+(encrypted) in aiSecurityWarden and loaded by ``sw-mcp`` on every machine that uses it, without pip.
 
-    sw-mcp pack --connector notes -o notes.swconnector     # then upload it on the SecurityWarden website
+    sw-mcp pack --connector notes -o notes.swconnector     # then upload it on the aiSecurityWarden website
 
 A bundle holds the connector's package (``.py`` files and small text data files), the entry point
 (``package.module:Class``), and a description of its tools for the website to show before upload. Bundled
-connectors may use only the standard library and what the SecurityWarden client already installs (httpx,
+connectors may use only the standard library and what the aiSecurityWarden client already installs (httpx,
 cryptography). They are imported from memory: nothing is written to disk.
 """
 
@@ -55,7 +55,7 @@ def top_levels(bundle: dict[str, Any]) -> set[str]:
 def validate_bundle(bundle: Any) -> dict[str, Any]:
     """Check a bundle's shape (not its code). Returns it; raises BundleError."""
     if not isinstance(bundle, dict) or bundle.get("format") != FORMAT:
-        raise BundleError(f"not a SecurityWarden connector bundle (format {FORMAT})")
+        raise BundleError(f"not an aiSecurityWarden connector bundle (format {FORMAT})")
     name, entry, files = bundle.get("name"), bundle.get("entry"), bundle.get("files")
     if not isinstance(name, str) or not NAME_RE.match(name):
         raise BundleError("the bundle's connector name must be lowercase letters, digits and _")

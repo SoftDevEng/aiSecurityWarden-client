@@ -1,6 +1,6 @@
-# CLAUDE.md — SecurityWarden client
+# CLAUDE.md — aiSecurityWarden client
 
-The open-source (Apache-2.0) client for SecurityWarden: scoped machine tokens and end-to-end encryption.
+The open-source (Apache-2.0) client for aiSecurityWarden: scoped machine tokens and end-to-end encryption.
 Primary consumer: Hermes Agent via its command-helper secret source (`swctl export`).
 Must run on Linux and Windows. The server is a separate, private repository (`aiSecurityWarden-server`),
 which depends on this package for its crypto and parsers.
@@ -45,4 +45,8 @@ this package; run them there before releasing a change here.
 
 - Python ≥ 3.10, standard library first; keep dependencies minimal (`cryptography`, `httpx`).
 - Tests for every security property you add (negative tests matter most).
-- Releases are tagged `vX.Y.Z[.devN]`; the server pins a tag.
+- Releases are tagged `vX.Y.Z[.devN]`; the server pins a tag. A `v*` tag publishes to PyPI as `aisecuritywarden`
+  (`.github/workflows/release.yml`, trusted publishing); the tag must equal `__version__`. PyPI files can't be
+  replaced: a mistake means a new version.
+- Installs as `aisecuritywarden` (PyPI), imports as `securitywarden`. User-facing text says "aiSecurityWarden". The
+  `securitywarden/v1/...` labels in crypto.py and the config folders never change (existing data depends on them).

@@ -1,4 +1,4 @@
-"""Testing helpers for connectors: a stand-in for the SecurityWarden server, so a connector's tests run
+"""Testing helpers for connectors: a stand-in for the aiSecurityWarden server, so a connector's tests run
 without a server, a token or a network.
 
     from securitywarden.mcp.testing import FakeSecurityWarden, make_hub

@@ -1,4 +1,4 @@
-"""swadmin — a desktop admin window for SecurityWarden.
+"""swadmin — a desktop admin window for aiSecurityWarden.
 
 Tkinter only (standard library), so it runs wherever the client does. It is a thin
 window over :class:`SecurityWardenClient`: all encryption still happens in
@@ -637,7 +637,7 @@ class AdminApp:
     def _need_project(self) -> bool:
         if self.project:
             return True
-        messagebox.showinfo("SecurityWarden", "Create or select a project first.", parent=self.root)
+        messagebox.showinfo("aiSecurityWarden", "Create or select a project first.", parent=self.root)
         return False
 
     def _on_new_project(self) -> None:
@@ -692,7 +692,7 @@ class AdminApp:
             return
         tok = next(t for t in self.tokens if t["id"] == tid)
         if not tok.get("approval"):
-            messagebox.showinfo("SecurityWarden", "That token does not need approval.", parent=self.root)
+            messagebox.showinfo("aiSecurityWarden", "That token does not need approval.", parent=self.root)
         elif self.confirm("Reset approval limit", f"Let “{tok['name']}” ask for approval again now?\n\n"
                           "Its hourly count starts over and any request still waiting is cancelled. "
                           "Approved sessions keep working; the history stays in the activity log."):
@@ -706,7 +706,7 @@ class AdminApp:
         if not a:
             return
         if not a["decidable"]:
-            messagebox.showinfo("SecurityWarden", "This token's policy does not allow approval from this window.",
+            messagebox.showinfo("aiSecurityWarden", "This token's policy does not allow approval from this window.",
                                 parent=self.root)
             return
         what = ""
@@ -724,7 +724,7 @@ class AdminApp:
             return
         tok = next(t for t in self.tokens if t["id"] == tid)
         if tok["revoked_at"]:
-            messagebox.showinfo("SecurityWarden", "That token is already revoked.", parent=self.root)
+            messagebox.showinfo("aiSecurityWarden", "That token is already revoked.", parent=self.root)
         elif self.confirm("Revoke token", f"Revoke “{tok['name']}”?\n\nThe machine using it loses access "
                           "immediately. It cannot be un-revoked."):
             self.revoke_token(tid)

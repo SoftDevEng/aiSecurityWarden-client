@@ -1,4 +1,4 @@
-"""The built-in connectors: made by SecurityWarden and shipped with the client. Any account can turn them on
+"""The built-in connectors: made by aiSecurityWarden and shipped with the client. Any account can turn them on
 for a project on the website; they don't count against the account's custom connector limit."""
 
 from __future__ import annotations

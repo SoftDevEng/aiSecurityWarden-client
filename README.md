@@ -1,6 +1,6 @@
-# SecurityWarden client
+# aiSecurityWarden client
 
-The open-source client for **SecurityWarden**, a secrets service with **scoped, revocable machine tokens**
+The open-source client for **aiSecurityWarden**, a secrets service with **scoped, revocable machine tokens**
 and **end-to-end encryption**. Built so AI agents (like [Hermes Agent](https://hermes-agent.nousresearch.com))
 and other unattended services can fetch API keys at startup without ever storing those keys on disk.
 
@@ -17,7 +17,7 @@ This repository contains:
   shared test vectors other implementations are checked against;
 - the protocol and design document: [docs/DESIGN.md](docs/DESIGN.md).
 
-The SecurityWarden server is a separate product.
+The aiSecurityWarden server is a separate product.
 
 > **Status: alpha.** The design is deliberately small and reviewable, but it has not had an independent
 > security audit. Read the [threat model](#threat-model).
@@ -25,7 +25,7 @@ The SecurityWarden server is a separate product.
 ## How it works
 
 ```
- Admin workstation                 SecurityWarden server                Agent box (e.g. jarvis)
+ Admin workstation                 aiSecurityWarden server                Agent box (e.g. jarvis)
  ─────────────────                 ─────────────────────                ───────────────────────
  swctl admin ...                   stores only:                         sw1.m.<id>.<secret>:<key>
   • creates project key  ───────▶   • ciphertext                        (chmod 600 file)
@@ -73,8 +73,17 @@ read any secret**. A full copy of the server's database is useless without a tok
 ## Install
 
 ```bash
-pip install securitywarden        # once published; for now from this repository:
-pip install git+https://github.com/SoftDevEng/aiSecurityWarden-client
+pipx install aisecuritywarden     # or: pip install aisecuritywarden (in a virtual environment)
+```
+
+It installs the commands `swctl`, `sw-mcp` and `swadmin`. In Python code (connectors) the package is imported as
+`securitywarden`, e.g. `from securitywarden.mcp import Connector`.
+
+**Coming from 0.6 (installed as `securitywarden`)?** Reinstall once under the new name; your tokens and settings
+stay where they are:
+
+```bash
+pip uninstall securitywarden && pip install aisecuritywarden     # same environment as before
 ```
 
 Needs Python 3.10+, on Linux, Windows or macOS (all three are tested in CI). `swadmin` also needs Tkinter:
@@ -89,7 +98,7 @@ it ships with the python.org installers for Windows and macOS; on Debian/Ubuntu,
 
    ```bash
    python3 -m venv ~/.venvs/securitywarden
-   ~/.venvs/securitywarden/bin/pip install git+https://github.com/SoftDevEng/aiSecurityWarden-client
+   ~/.venvs/securitywarden/bin/pip install aisecuritywarden
    ~/.venvs/securitywarden/bin/swadmin          # the admin window; swctl and sw-mcp are next to it
    ```
 
@@ -119,7 +128,7 @@ pip install -e ".[dev]" && pytest
 
 ## Quick start
 
-You need the address of a SecurityWarden server and, to administer it, its admin credential.
+You need the address of an aiSecurityWarden server and, to administer it, its admin credential.
 
 ### 1. Admin (from your workstation)
 
@@ -154,7 +163,7 @@ lines at launch. That's exactly what `swctl export` does. See
 ### AI agent tools with approval (`sw-mcp`)
 
 `sw-mcp` gives an agent tools for an application, such as Gmail, as an MCP server. Every action goes through
-the token's rules in SecurityWarden: reading may be allowed outright, while sending an email waits until you
+the token's rules in aiSecurityWarden: reading may be allowed outright, while sending an email waits until you
 approve exactly that email (on the website, in swadmin, Telegram or ntfy). The agent is told it's waiting and
 checks back. See [docs/mcp-gmail.md](docs/mcp-gmail.md) for the Gmail set-up with Hermes, and
 [DESIGN.md](docs/DESIGN.md#mcp-connectors) for writing a connector for another application.
@@ -171,7 +180,7 @@ write one: `sw-mcp new-connector NAME` creates the project (with instructions fo
 `sw-mcp guide` prints the rules, and `sw-mcp check` plus the generated tests confirm it's right. Installed
 connector packages are found by name (`--connector NAME`). See [docs/connectors.md](docs/connectors.md).
 
-Connectors can also come from SecurityWarden itself: turn a built-in one (Gmail) on for a project on the website,
+Connectors can also come from aiSecurityWarden itself: turn a built-in one (Gmail) on for a project on the website,
 or upload your own (`sw-mcp pack NAME`, then **Connectors > Upload**; encrypted in the browser, account-wide,
 versioned with a backup of the version replaced). `sw-mcp serve` then loads whatever the token's project uses,
 with no `--connector` needed, and picks up new versions as you choose: at once, or on the next restart.

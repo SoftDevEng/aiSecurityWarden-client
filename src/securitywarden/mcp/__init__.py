@@ -1,5 +1,5 @@
-"""SecurityWarden MCP connectors: give an AI agent tools for an application (Gmail, ...) where every action
-goes through the token's rules in SecurityWarden and, when they say so, a person's approval.
+"""aiSecurityWarden MCP connectors: give an AI agent tools for an application (Gmail, ...) where every action
+goes through the token's rules in aiSecurityWarden and, when they say so, a person's approval.
 
 Writing a connector::
 

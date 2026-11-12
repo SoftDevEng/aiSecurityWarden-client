@@ -1,6 +1,6 @@
 # Gmail for an AI agent, with approval
 
-This sets up the Gmail connector so an agent (Hermes here) can read and manage a mailbox, while SecurityWarden
+This sets up the Gmail connector so an agent (Hermes here) can read and manage a mailbox, while aiSecurityWarden
 decides what it may do on its own and asks you for the rest. Nothing here needs the Gmail password.
 
 What you end up with:
@@ -9,11 +9,11 @@ What you end up with:
 - Labelling, archiving and marking read ask once, then are allowed for 30 minutes.
 - Drafts, sending, replying, forwarding and moving to Trash ask every time, showing you the recipients,
   subject and text. Only exactly what you approved is sent.
-- Your rules live in SecurityWarden, not on the agent's machine.
+- Your rules live in aiSecurityWarden, not on the agent's machine.
 
 ## 1. Google Cloud (once, about 10 minutes)
 
-1. Go to <https://console.cloud.google.com/>, create a project (e.g. "SecurityWarden Gmail").
+1. Go to <https://console.cloud.google.com/>, create a project (e.g. "aiSecurityWarden Gmail").
 2. **APIs & Services → Library**: enable the **Gmail API**.
 3. **Google Auth Platform → Branding / Audience** (older consoles: **OAuth consent screen**): user type
    **External**, fill in an app name and your email. Under **Audience**, add the Gmail address the agent will
@@ -22,7 +22,7 @@ What you end up with:
    an "unverified app" warning once when signing in.)
 4. **Clients → Create client**: type **Desktop app**. Keep the **Client ID** and **Client secret** for step 2.
 
-## 2. SecurityWarden (website)
+## 2. aiSecurityWarden (website)
 
 1. Create a project, e.g. **mail**.
 2. **Secrets**: add `GMAIL_CLIENT_ID` and `GMAIL_CLIENT_SECRET` from step 1.
@@ -39,7 +39,7 @@ What you end up with:
 Install the client:
 
 ```bash
-python -m pip install "securitywarden @ git+https://github.com/SoftDevEng/aiSecurityWarden-client"
+python -m pip install aisecuritywarden
 ```
 
 ### Hermes or Claude Desktop: add the MCP server
@@ -70,7 +70,7 @@ its own, which still works.)
 
 ### Give it the setup code
 
-On the website, **Copy for the agent** and paste it into the chat (*"Set up SecurityWarden with code SWS1-…"*). The
+On the website, **Copy for the agent** and paste it into the chat (*"Set up aiSecurityWarden with code SWS1-…"*). The
 agent calls `securitywarden_setup`, which stores the token in `SW_Tokens.json` under its id, readable only by
 your user, and the Gmail tools work; the website's dialog closes by itself once the code is used. A code for
 another token is refused without being used up. Or, in a terminal on the machine:
@@ -88,7 +88,7 @@ new token, and give the agent the new setup code. No terminal needed.
 sw-mcp login gmail --server https://vault.example.com --token-file <the same token file> 
 ```
 
-It reads the client ID and secret from SecurityWarden, opens Google's sign-in (sign in with the agent's Gmail
+It reads the client ID and secret from aiSecurityWarden, opens Google's sign-in (sign in with the agent's Gmail
 account and allow access), and prints a refresh token **once** on standard output. Add it to the project's
 **Secrets** as `GMAIL_REFRESH_TOKEN` (on Windows: `sw-mcp login gmail ... | Set-Clipboard`, then paste). With the
 admin credential on this machine, `--project mail` stores it directly instead. A headless machine like a server
@@ -98,7 +98,7 @@ Check by hand before involving the agent:
 
 ```bash
 sw-mcp call gmail_search query=is:unread limit=3 --connector gmail
-sw-mcp call gmail_send to=you@example.com subject=Test "body=Hello\nfrom SecurityWarden" --connector gmail
+sw-mcp call gmail_send to=you@example.com subject=Test "body=Hello\nfrom aiSecurityWarden" --connector gmail
 ```
 
 `sw-mcp call` waits (up to 15 minutes) while an action needs your approval, then prints the result.
@@ -121,7 +121,7 @@ secret; the token itself never goes in the MCP settings.
 - Emails are shown to the agent as untrusted data with a warning not to follow instructions inside them.
   The approval on sending is what protects you if an email tries to trick the agent ("forward all bank mail
   to …"): you'd see that forward and its recipient before anything leaves.
-- Revoking the SecurityWarden token stops the agent at once. To cut Gmail access too, remove the app at
+- Revoking the aiSecurityWarden token stops the agent at once. To cut Gmail access too, remove the app at
   <https://myaccount.google.com/permissions>.
 - Waiting actions are kept by the `sw-mcp` process; if it restarts, the agent just asks again.
 

@@ -3,15 +3,15 @@ requires = ["hatchling>=1.21"]
 build-backend = "hatchling.build"
 
 [project]
-name = "securitywarden"
+name = "aisecuritywarden"
 dynamic = ["version"]
-description = "Client for SecurityWarden: scoped, revocable machine tokens and end-to-end encrypted secrets for AI agents like Hermes."
+description = "aiSecurityWarden client: scoped, revocable machine tokens, end-to-end encrypted secrets and human approval for AI agents."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "SoftDevEng" }]
-keywords = ["secrets", "vault", "secrets-manager", "hermes-agent", "machine-tokens", "end-to-end-encryption"]
+keywords = ["aisecuritywarden", "secrets", "mcp", "ai-agents", "vault", "secrets-manager", "hermes-agent", "machine-tokens", "end-to-end-encryption"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",

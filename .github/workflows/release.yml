@@ -1,0 +1,58 @@
+# Publishes the client to PyPI as "aisecuritywarden" when a version tag (v0.7.0, ...) is pushed.
+# Uses PyPI trusted publishing: no password or token is stored anywhere. One-time setup on pypi.org:
+# Your account -> Publishing -> add a (pending) publisher: project aisecuritywarden, owner SoftDevEng,
+# repository aiSecurityWarden-client, workflow release.yml, environment pypi. And a "pypi" environment here
+# (Settings -> Environments), optionally with required reviewers so each upload waits for a click.
+# PyPI never lets a version's files be replaced: a mistake means a new version.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: The tag matches the version
+        run: |
+          v=$(python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('src/securitywarden/__init__.py').read())[1])")
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then echo "tag $GITHUB_REF_NAME doesn't match __version__ $v"; exit 1; fi
+      - name: Test
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m pytest -q
+      - name: Build
+        run: |
+          python -m pip install build
+          python -m build
+          ls -l dist
+      - name: The built wheel installs and runs
+        run: |
+          python -m venv /tmp/check
+          /tmp/check/bin/pip install dist/*.whl
+          cd /tmp && /tmp/check/bin/sw-mcp --version && /tmp/check/bin/swctl --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write        # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

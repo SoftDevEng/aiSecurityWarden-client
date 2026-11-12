@@ -1,6 +1,6 @@
 # Security Policy
 
-SecurityWarden is alpha software that hasn't been independently audited.
+aiSecurityWarden is alpha software that hasn't been independently audited.
 
 ## Reporting a vulnerability
 

@@ -235,7 +235,7 @@ as the server-wide settings: secrets are never sent back (last four characters o
 - **A press only counts through the request's own project.** A poller reports what came in (bot, chat and
   user, or reply topic); the server decides only if that matches the settings of the request's project:
   the same bot and chat (and an allowed user, when listed), or the same reply topic. Anything else is
-  refused ("Not a SecurityWarden request for this chat.") and audited, even with a genuine capability. So a
+  refused ("Not an aiSecurityWarden request for this chat.") and audited, even with a genuine capability. So a
   bot shared between projects or owners can't be used to approve another project's requests from another
   chat.
 - **Policies:** a token may name `push:telegram` / `push:ntfy` only while its project has that channel (and,
@@ -305,7 +305,7 @@ The client always sends it encrypted under the project key
 (`HKDF(project_key, "securitywarden/v1/action-summary")`, AAD above) as `summary_enc`, which the web
 pages and `swctl` decrypt. It also sends it in plaintext as `summary` unless the project keeps summaries
 encrypted: then the server, the activity log and phone messages never see the content (phone messages
-say only "jarvis wants to: gmail.send — open SecurityWarden to review", without buttons).
+say only "jarvis wants to: gmail.send — open aiSecurityWarden to review", without buttons).
 
 ### Policy (per token, set by an admin; the agent can't change it)
 
@@ -428,17 +428,17 @@ that tricks the agent into calling it can't swap the token. Once the server reje
 on sign-in: revoked, expired or deleted; the client raises `TokenRejected`), every tool answers "the token was
 revoked: ask the user for a new setup code", and `securitywarden_setup` checks with the server
 (`check_token()`) and then replaces the file. Network errors, rate limits, address lists and pending approvals
-never count as rejected. Only someone signed in to the token's SecurityWarden account can revoke it.
+never count as rejected. Only someone signed in to the token's aiSecurityWarden account can revoke it.
 
-Rules are in SecurityWarden, so a compromised or confused agent can't loosen them; the connector's declared
+Rules are in aiSecurityWarden, so a compromised or confused agent can't loosen them; the connector's declared
 risk is shown when choosing them, and the suggested rules ask for high-risk actions. The honest limit stays: whoever controls the
 agent's machine holds the token and the application's credentials.
 
-**Finding connectors.** The ones turned on for the token's project in SecurityWarden (see "Connector
+**Finding connectors.** The ones turned on for the token's project in aiSecurityWarden (see "Connector
 distribution"), plus any named in the MCP settings: by name from the entry-point group `securitywarden.connectors` (installed packages
 declare `name = "module:Class"`; Gmail is registered the same way), or directly as `module:Class`. A connector's
 actions must start with its `name`. `sw-mcp check` lints connectors (names, schemas against method signatures, no
-floats, suggested rules); `securitywarden.mcp.testing` gives connector tests a fake SecurityWarden; the guide for
+floats, suggested rules); `securitywarden.mcp.testing` gives connector tests a fake aiSecurityWarden; the guide for
 authors (and their AI) ships as `securitywarden/mcp/CONNECTORS.md` (`sw-mcp guide`).
 
 ### Gmail (`securitywarden.mcp.gmail`)
@@ -521,7 +521,7 @@ a denied call would be refused anyway). Changing the rules changes the list with
 
 **Built-in connectors** (`securitywarden/mcp/catalog.py`: Gmail today) ship with the client. The server lists
 them from the client package it runs with; making one available to a project stores `builtin:<name>`. Machines whose
-client doesn't have that connector yet log "update the SecurityWarden client" and carry on. They never count
+client doesn't have that connector yet log "update the aiSecurityWarden client" and carry on. They never count
 against an account's limits.
 
 **Custom connectors** are stored by the server, encrypted, account-wide (one upload serves every project of the
@@ -583,7 +583,8 @@ Once customers run the client, a server change may need a newer client. They hav
 easy, safe way to upgrade. (Added in 0.6.0.dev25.)
 
 **Signed releases.** A release is a client wheel plus `<wheel>.swrel`: a manifest (`format` `swrel1`, `package`,
-`version`, `file`, `sha256`, `size`, `published`, `notes`) and an Ed25519 signature over
+`version`, `file`, `sha256`, `size`, `published`, `notes`; `package` is `aisecuritywarden` from 0.7.0, when the
+client was renamed from `securitywarden`) and an Ed25519 signature over
 `"securitywarden/v1/release\n" || canonical JSON(manifest)` (sorted keys, no spaces). The release key is kept
 offline on the release workstation (`python -m securitywarden.release keygen|sign|verify`); its public key is
 built into the client (`securitywarden.release.TRUSTED_KEYS`, by key id = first 8 bytes of SHA-256 of the raw
@@ -597,7 +598,7 @@ Every client request carries `X-SW-Client: <version>`; the server keeps the last
 show each machine's client and say when it is behind. A version number only, nothing else about the machine.
 
 **Client.** Installs a release only if: the signature checks out with a built-in key; the manifest is well-formed
-(file name = `securitywarden-<version>-py3-none-any.whl`, matching the wheel's own METADATA when signing); the
+(file name = `aisecuritywarden-<version>-py3-none-any.whl`, matching the wheel's own METADATA when signing); the
 downloaded bytes match `size` and `sha256`; and the version is newer than the installed one (no downgrades, PEP 440
 ordering). It installs with `<this python> -m pip install --upgrade-strategy only-if-needed <wheel>` into the same
 environment it runs from. Development installs (`pip install -e`) and environments without pip refuse and say so.
@@ -662,7 +663,7 @@ is created (website, `swctl admin token create --setup-code`), working once, for
   The website closes its setup dialog when it reads `used`, and says from which address.
 
 Ways to redeem: the agent's `securitywarden_setup` tool, `sw-mcp setup`, `swctl setup`. The website's
-**Copy for the agent** copies *"Set up SecurityWarden with code SWS1-…"*, ready to paste into the chat (never with
+**Copy for the agent** copies *"Set up aiSecurityWarden with code SWS1-…"*, ready to paste into the chat (never with
 a server address: the agent only uses the server in its own settings).
 
 ### SW_Tokens.json (tokens on a machine, by token id)

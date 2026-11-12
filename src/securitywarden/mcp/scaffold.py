@@ -28,7 +28,7 @@ def create_connector_project(name: str, parent: str = ".", *, title: str | None 
         "__CLASS__": _class_name(name),
         "__TITLE__": title or _class_name(name),
         "__PKG__": f"sw_connector_{name}",
-        "__DIST__": f"securitywarden-connector-{name.replace('_', '-')}",
+        "__DIST__": f"aisecuritywarden-connector-{name.replace('_', '-')}",
         "__SWVER__": __version__,
     }
     files = {
@@ -36,7 +36,7 @@ def create_connector_project(name: str, parent: str = ".", *, title: str | None 
         "README.md": README,
         "AGENTS.md": AGENTS,
         "CLAUDE.md": "Read AGENTS.md in this folder first, then follow it.\n",
-        f"src/{values['__PKG__']}/__init__.py": '"""SecurityWarden connector for __TITLE__."""\n',
+        f"src/{values['__PKG__']}/__init__.py": '"""aiSecurityWarden connector for __TITLE__."""\n',
         f"src/{values['__PKG__']}/connector.py": CONNECTOR,
         "tests/test_connector.py": TEST,
     }
@@ -57,10 +57,10 @@ build-backend = "hatchling.build"
 [project]
 name = "__DIST__"
 version = "0.1.0"
-description = "SecurityWarden connector for __TITLE__: an AI agent's tools, with every action approved through SecurityWarden."
+description = "aiSecurityWarden connector for __TITLE__: an AI agent's tools, with every action approved through aiSecurityWarden."
 requires-python = ">=3.10"
 dependencies = [
-  "securitywarden>=__SWVER__",
+  "aisecuritywarden>=__SWVER__",
   "httpx>=0.27",
 ]
 
@@ -75,9 +75,9 @@ __NAME__ = "__PKG__.connector:__CLASS__"
 packages = ["src/__PKG__"]
 '''
 
-README = '''# SecurityWarden connector for __TITLE__
+README = '''# aiSecurityWarden connector for __TITLE__
 
-Gives an AI agent (Hermes, Claude, ...) tools for __TITLE__. Every action goes through the agent's SecurityWarden
+Gives an AI agent (Hermes, Claude, ...) tools for __TITLE__. Every action goes through the agent's aiSecurityWarden
 token: its rules decide what runs at once and what waits for a person's approval.
 
 ## Develop
@@ -92,7 +92,7 @@ The guide to writing connectors: `sw-mcp guide` (AGENTS.md says how to use it wi
 
 ## Use
 
-1. In SecurityWarden: a project with the secrets this connector declares (`secrets = (...)` in connector.py),
+1. In aiSecurityWarden: a project with the secrets this connector declares (`secrets = (...)` in connector.py),
    and a token for the agent with the suggested rules (`sw-mcp tools --connector __NAME__` prints them).
 2. Either upload it: `sw-mcp pack __PKG__.connector:__CLASS__` writes `__NAME__.swconnector`; on the website,
    Connectors > Upload, make it available to the project and tick it for the token. Or install this package where the agent runs `sw-mcp`
@@ -104,8 +104,8 @@ The guide to writing connectors: `sw-mcp guide` (AGENTS.md says how to use it wi
 
 AGENTS = '''# Instructions for the AI completing this connector
 
-You are building a SecurityWarden connector: Python tools that let an AI agent use __TITLE__, where every action
-is checked against the user's SecurityWarden rules and, when they say so, approved by a person first.
+You are building an aiSecurityWarden connector: Python tools that let an AI agent use __TITLE__, where every action
+is checked against the user's aiSecurityWarden rules and, when they say so, approved by a person first.
 
 1. Read the guide before writing code: run `sw-mcp guide` and follow it exactly. It is the contract.
 2. Edit `src/__PKG__/connector.py`. The example tools show the pattern; replace them with the tools the user
@@ -122,14 +122,14 @@ is checked against the user's SecurityWarden rules and, when they say so, approv
        sw-mcp check --connector __NAME__
        pytest
 8. Make sure it packs: `sw-mcp pack __NAME__` (use only the standard library, httpx and cryptography).
-9. Tell the user: the secrets to add in SecurityWarden, the suggested rules, how to upload it (website,
+9. Tell the user: the secrets to add in aiSecurityWarden, the suggested rules, how to upload it (website,
    Connectors > Upload the .swconnector file, then turn it on for the project), and how to try it
    (`sw-mcp call __NAME___<tool> ...`).
 '''
 
-CONNECTOR = '''"""SecurityWarden connector for __TITLE__.
+CONNECTOR = '''"""aiSecurityWarden connector for __TITLE__.
 
-Actions and their risk (the token's rules in SecurityWarden decide what asks a person):
+Actions and their risk (the token's rules in aiSecurityWarden decide what asks a person):
 
     __NAME__.read.items    low     list items
     __NAME__.delete        high    delete an item (the suggested rules ask every time)
@@ -163,7 +163,7 @@ class __CLASS__(Connector):
     def close(self) -> None:
         self.http.close()
 
-    # -- tools: each prepares a Plan; SecurityWarden decides whether it runs ------------------------
+    # -- tools: each prepares a Plan; aiSecurityWarden decides whether it runs ------------------------
 
     @tool("List items, newest first. Returns ids and titles.", action="__NAME__.read.items", risk="low",
           params={"limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Default 20."}})
@@ -196,7 +196,7 @@ class __CLASS__(Connector):
         if r.status_code == 404:
             raise ToolError("__TITLE__ says that doesn't exist.")
         if r.status_code in (401, 403):
-            raise ToolError("__TITLE__ refused the API key; ask the user to check __UPPER___API_KEY in SecurityWarden.")
+            raise ToolError("__TITLE__ refused the API key; ask the user to check __UPPER___API_KEY in aiSecurityWarden.")
         if r.status_code >= 400:
             raise ToolError(f"__TITLE__ returned an error ({r.status_code}).")
         return r.json() if r.content else {}
@@ -205,7 +205,7 @@ class __CLASS__(Connector):
         return self._call("GET", path, **kw)
 '''
 
-TEST = '''"""Tests for the __TITLE__ connector: __TITLE__ is faked with httpx.MockTransport and SecurityWarden with
+TEST = '''"""Tests for the __TITLE__ connector: __TITLE__ is faked with httpx.MockTransport and aiSecurityWarden with
 FakeSecurityWarden, so nothing real is called."""
 
 import httpx

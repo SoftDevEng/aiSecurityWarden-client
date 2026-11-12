@@ -1,4 +1,4 @@
-"""The approval proxy: any MCP server's tools, behind SecurityWarden's action gate.
+"""The approval proxy: any MCP server's tools, behind aiSecurityWarden's action gate.
 
 A **mapping file** (``*.swproxy``, JSON, format ``sw-proxy/1``) says how to reach the upstream MCP server (a local
 program over stdio, or an https URL) and which of its tools are which actions::

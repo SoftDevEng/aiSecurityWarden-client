@@ -1,9 +1,9 @@
-"""Gmail connector: an AI agent reads and manages a mailbox, and every action goes through SecurityWarden.
+"""Gmail connector: an AI agent reads and manages a mailbox, and every action goes through aiSecurityWarden.
 
-Secrets (in the token's SecurityWarden project): GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET (a Google Cloud
+Secrets (in the token's aiSecurityWarden project): GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET (a Google Cloud
 "Desktop app" OAuth client) and GMAIL_REFRESH_TOKEN (from ``sw-mcp login gmail``). No Gmail password.
 
-Actions and their risk (the token's rules in SecurityWarden decide what asks a person):
+Actions and their risk (the token's rules in aiSecurityWarden decide what asks a person):
 
     gmail.read.search / .message / .thread / .labels   low     reading
     gmail.label, gmail.archive, gmail.mark_read         low     organizing (a time window may cover these)
@@ -354,7 +354,7 @@ class Gmail(Connector):
 
     @classmethod
     def login(cls, args: Any) -> None:
-        """Google sign-in in the browser (loopback + PKCE), once. The refresh token goes to SecurityWarden."""
+        """Google sign-in in the browser (loopback + PKCE), once. The refresh token goes to aiSecurityWarden."""
         client_id, client_secret = _oauth_client(args)
         verifier, challenge = crypto.pkce_pair()
         state = crypto.new_nonce()
@@ -372,7 +372,7 @@ class Gmail(Connector):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(b"<p>SecurityWarden: done. You can close this tab and go back to the terminal.</p>")
+                self.wfile.write(b"<p>aiSecurityWarden: done. You can close this tab and go back to the terminal.</p>")
                 done.set()
 
             def log_message(self, *a: Any) -> None:
@@ -538,7 +538,7 @@ def _json(r: httpx.Response) -> dict[str, Any]:
 
 
 def _has_token(args: Any) -> bool:
-    """Whether this machine has a SecurityWarden token to read the OAuth client from: a token file, the
+    """Whether this machine has an aiSecurityWarden token to read the OAuth client from: a token file, the
     environment, or SW_Tokens.json (the named token, or the only one there)."""
     if getattr(args, "token_file", None) or os.environ.get("SW_ACCESS_TOKEN_FILE") or os.environ.get("SW_ACCESS_TOKEN"):
         return True
@@ -553,16 +553,16 @@ def _has_token(args: Any) -> bool:
 
 
 def _oauth_client(args: Any) -> tuple[str, str]:
-    """The OAuth client id and secret: from the bot's SecurityWarden project if a token is set up, else asked."""
+    """The OAuth client id and secret: from the bot's aiSecurityWarden project if a token is set up, else asked."""
     from .cli import _client, _config
     if _has_token(args):
         try:
             s = _client(args, _config(args)).fetch()
             if s.get("GMAIL_CLIENT_ID") and s.get("GMAIL_CLIENT_SECRET"):
-                print("Using GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET from SecurityWarden.", file=sys.stderr)
+                print("Using GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET from aiSecurityWarden.", file=sys.stderr)
                 return s["GMAIL_CLIENT_ID"], s["GMAIL_CLIENT_SECRET"]
         except Exception as e:  # noqa: BLE001
-            print(f"sw-mcp: couldn't read them from SecurityWarden ({e}); asking instead.", file=sys.stderr)
+            print(f"sw-mcp: couldn't read them from aiSecurityWarden ({e}); asking instead.", file=sys.stderr)
     print("Google OAuth client ID: ", end="", file=sys.stderr, flush=True)   # stdout carries only the token
     cid = input().strip()
     secret = getpass.getpass("Google OAuth client secret (not shown): ").strip()
@@ -585,7 +585,7 @@ def _store_refresh_token(args: Any, token: str, who: str) -> None:
         admin.set_secret(args.project, "GMAIL_REFRESH_TOKEN", token)
         print(f"Signed in as {who}. Stored GMAIL_REFRESH_TOKEN in project {args.project}.", file=sys.stderr)
         return
-    print(f"Signed in as {who}.\n\nAdd this to the bot's SecurityWarden project as the secret GMAIL_REFRESH_TOKEN "
+    print(f"Signed in as {who}.\n\nAdd this to the bot's aiSecurityWarden project as the secret GMAIL_REFRESH_TOKEN "
           "(website: the project's Secrets tab). It's shown once and gives access to the mailbox: don't save it "
           "anywhere else, and clear this terminal afterwards.\n", file=sys.stderr)
     print(token)

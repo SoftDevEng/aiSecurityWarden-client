@@ -57,7 +57,7 @@ def default_tokens_path() -> str:
 def check_name(name: str) -> str:
     name = (name or "").strip()
     if not name or len(name) > NAME_MAX or any(ord(ch) < 32 for ch in name):
-        raise SecurityWardenError("a token name is 1-100 characters, as on the SecurityWarden website")
+        raise SecurityWardenError("a token name is 1-100 characters, as on the aiSecurityWarden website")
     return name
 
 
@@ -95,7 +95,7 @@ class TokenStore:
             raise SecurityWardenError(f"can't read {self.path}: {e}") from None
         if not isinstance(data, dict) or not isinstance(data.get("tokens"), dict) \
                 or data.get("format") not in (FORMAT, OLD_FORMAT):
-            raise SecurityWardenError(f"{self.path} isn't a SecurityWarden token file ({FORMAT})")
+            raise SecurityWardenError(f"{self.path} isn't an aiSecurityWarden token file ({FORMAT})")
         if data["format"] == OLD_FORMAT:
             self._old_format = True
             out: dict[str, dict[str, Any]] = {}

@@ -1,4 +1,4 @@
-"""Gmail connector against a fake Gmail API and the scripted SecurityWarden from test_mcp."""
+"""Gmail connector against a fake Gmail API and the scripted aiSecurityWarden from test_mcp."""
 
 import base64
 import email

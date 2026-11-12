@@ -111,7 +111,7 @@ def test_setup_from_code_works_once(tmp_path, http, setup_server):
     with pytest.raises(SecurityWardenError, match="already holds a token"):
         setup_from_code("https://vault.example.com", code2, str(tmp_path / "t"), http=http)
     assert len(setup_server.codes) == 1
-    with pytest.raises(SecurityWardenError, match="isn't a SecurityWarden setup code"):
+    with pytest.raises(SecurityWardenError, match="isn't an aiSecurityWarden setup code"):
         redeem_setup_code("https://vault.example.com", "hello", http=http)
     with pytest.raises(SecurityWardenError, match="plain http"):
         redeem_setup_code("http://vault.example.com", code2)

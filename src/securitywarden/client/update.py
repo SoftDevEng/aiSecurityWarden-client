@@ -77,7 +77,7 @@ def install_problem() -> str | None:
     """Why this client can't update itself, or None."""
     try:
         from importlib.metadata import distribution
-        direct = distribution("securitywarden").read_text("direct_url.json")
+        direct = distribution("aisecuritywarden").read_text("direct_url.json")
         if direct and json.loads(direct).get("dir_info", {}).get("editable"):
             return "this is a development install (pip install -e); update it with git instead"
     except Exception:  # noqa: BLE001 - not installed as a package (e.g. run from a source tree)

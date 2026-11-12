@@ -324,12 +324,12 @@ def parse_recovery_key(text: str) -> bytes:
     if t.startswith(RECOVERY_PREFIX.rstrip("-")):
         t = t[len(RECOVERY_PREFIX) - 1:]
     if len(t) != 52 or any(c not in _B32 for c in t):
-        raise CryptoError("that isn't a SecurityWarden recovery key")
+        raise CryptoError("that isn't an aiSecurityWarden recovery key")
     bits = 0
     for c in t:
         bits = (bits << 5) | _B32.index(c)
     if bits & 0b1111:                    # 52 * 5 = 260 bits: the last 4 are padding and must be zero
-        raise CryptoError("that isn't a SecurityWarden recovery key")
+        raise CryptoError("that isn't an aiSecurityWarden recovery key")
     return (bits >> 4).to_bytes(KEY_LEN, "big")
 
 
@@ -547,7 +547,7 @@ def parse_setup_code(text: str) -> bytes:
     if t.startswith(SETUP_PREFIX.rstrip("-")):
         t = t[len(SETUP_PREFIX) - 1:]
     if len(t) != 32 or any(c not in _B32 for c in t):
-        raise CryptoError("that isn't a SecurityWarden setup code (SWS1-...)")
+        raise CryptoError("that isn't an aiSecurityWarden setup code (SWS1-...)")
     bits = 0
     for c in t:
         bits = (bits << 5) | _B32.index(c)
@@ -584,7 +584,7 @@ def decrypt_from_setup(secret: bytes, blob: str) -> Credential:
 
 
 # ---------------------------------------------------------------------------
-# connectors stored in SecurityWarden (see DESIGN.md "Connector distribution")
+# connectors stored in aiSecurityWarden (see DESIGN.md "Connector distribution")
 #
 # Each connector has its own random key. The key is wrapped for its owner (the account key, or the
 # operator's admin key) and for every project that uses the connector (the project key), so a project's
