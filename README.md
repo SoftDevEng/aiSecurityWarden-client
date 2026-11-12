@@ -18,7 +18,7 @@ This repository contains:
 - `swadmin`, a small desktop admin window;
 - the cryptography (`src/securitywarden/crypto.py`), the approval-policy and address-list parsers, and the
   shared test vectors other implementations are checked against;
-- the protocol and design document: [docs/DESIGN.md](docs/DESIGN.md).
+- the protocol and design document: [docs/DESIGN.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/DESIGN.md).
 
 The aiSecurityWarden server is a separate product.
 
@@ -161,15 +161,15 @@ swctl run -- python my_bot.py     # run a command with secrets in its environmen
 
 Hermes supports custom vaults through a **command helper** that prints `KEY=VALUE`
 lines at launch. That's exactly what `swctl export` does. See
-[examples/hermes/](examples/hermes/) for a wrapper script and config.
+[examples/hermes/](https://github.com/SoftDevEng/aiSecurityWarden-client/tree/main/examples/hermes) for a wrapper script and config.
 
 ### AI agent tools with approval (`sw-mcp`)
 
 `sw-mcp` gives an agent tools for an application, such as Gmail, as an MCP server. Every action goes through
 the token's rules in aiSecurityWarden: reading may be allowed outright, while sending an email waits until you
 approve exactly that email (on the website, in swadmin, Telegram or ntfy). The agent is told it's waiting and
-checks back. See [docs/mcp-gmail.md](docs/mcp-gmail.md) for the Gmail set-up with Hermes, and
-[DESIGN.md](docs/DESIGN.md#mcp-connectors) for writing a connector for another application.
+checks back. See [docs/mcp-gmail.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/mcp-gmail.md) for the Gmail set-up with Hermes, and
+[DESIGN.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/DESIGN.md#mcp-connectors) for writing a connector for another application.
 
 ```bash
 sw-mcp tools --connector gmail          # the tools, their actions, risks and suggested rules
@@ -181,7 +181,7 @@ sw-mcp setup --token-file ~/.config/securitywarden/gmail-token   # store the tok
 Other applications get a **connector**: one Python class whose tools each declare an action and a risk. An AI can
 write one: `sw-mcp new-connector NAME` creates the project (with instructions for the AI in `AGENTS.md`),
 `sw-mcp guide` prints the rules, and `sw-mcp check` plus the generated tests confirm it's right. Installed
-connector packages are found by name (`--connector NAME`). See [docs/connectors.md](docs/connectors.md).
+connector packages are found by name (`--connector NAME`). See [docs/connectors.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/connectors.md).
 
 Connectors can also come from aiSecurityWarden itself: turn a built-in one (Gmail) on for a project on the website,
 or upload your own (`sw-mcp pack NAME`, then **Connectors > Upload**; encrypted in the browser, account-wide,
@@ -225,7 +225,7 @@ swctl admin token set-approval <token-id> --approval session --session-ttl 8h \
 The machine prints a two-digit **match code** while it waits (`swctl: waiting for a person
 to approve this session (match code 47, up to 120 s)...`); approve only if the prompt shows
 the same code. An approval works once, only for the process and address that asked, and
-ends when the token is revoked or its policy changes. Details: [docs/DESIGN.md](docs/DESIGN.md#human-approval).
+ends when the token is revoked or its policy changes. Details: [docs/DESIGN.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/DESIGN.md#human-approval).
 
 ### Admin window (`swadmin`)
 
@@ -244,13 +244,13 @@ which ships with Python on Windows and macOS (`sudo apt install python3-tk` on D
 
 ## Cryptography
 
-All of it lives in [`src/securitywarden/crypto.py`](src/securitywarden/crypto.py): AES-256-GCM (random
+All of it lives in [`src/securitywarden/crypto.py`](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/src/securitywarden/crypto.py): AES-256-GCM (random
 96-bit nonces) with associated data binding every ciphertext to its context, HKDF-SHA256 for key separation,
 HMAC-SHA256 for secret-name lookup ids (names are encrypted too) and PBKDF2-SHA256 for account passwords,
 all from the `cryptography` library. There's no custom crypto. The server stores Argon2id hashes of the
-proofs clients send. Test vectors: [`tests/vectors/crypto-v1.json`](tests/vectors/crypto-v1.json)
-(regenerate with `python -m securitywarden.vectors`). Full design: [docs/DESIGN.md](docs/DESIGN.md).
+proofs clients send. Test vectors: [`tests/vectors/crypto-v1.json`](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/tests/vectors/crypto-v1.json)
+(regenerate with `python -m securitywarden.vectors`). Full design: [docs/DESIGN.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/DESIGN.md).
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE). Security reports: see [SECURITY.md](SECURITY.md).
+Apache-2.0. See [LICENSE](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/LICENSE). Security reports: see [SECURITY.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/SECURITY.md).
