@@ -308,8 +308,11 @@ class Hub:
     def __init__(self, client: Any, connectors: Sequence[type[Connector]], *, setup: SetupTarget | None = None,
                  log: Callable[[str], None] = _log, clock: Callable[[], float] = time.monotonic,
                  source: Any = None, refresh_every: float = 30.0,
-                 tool_cache: Callable[[], str | None] | None = None, updater: Any = None) -> None:
+                 tool_cache: Callable[[], str | None] | None = None, updater: Any = None, sudo: Any = None) -> None:
         self.client = client
+        # root commands through sw-sudo (mcp/sudo_tool.py): system_run, offered only where sw-sudo is set up for
+        # this user. It uses no token of ours; sw-sudo asks with its own.
+        self.sudo = sudo
         # client updates (securitywarden.client.update): offers securitywarden_check_update / securitywarden_update
         # and adds a one-line notice to a tool result when a newer client is out
         self.updater = updater
@@ -561,6 +564,8 @@ class Hub:
                 "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
                 "annotations": {"readOnlyHint": False, "destructiveHint": False},
             })
+        if self.sudo is not None and self.sudo.available():
+            out.append(self.sudo.spec())
         if self.offer_setup:
             out.append({
                 "name": self.SETUP_TOOL,
@@ -583,6 +588,11 @@ class Hub:
         arguments = dict(arguments or {})
         if name == self.SETUP_TOOL and self.offer_setup:
             return self._setup(arguments)
+        if self.sudo is not None:      # needs no token of this agent: sw-sudo asks with its own
+            if name == "system_run" and self.sudo.available():
+                return self.sudo.run(arguments)
+            if name == self.CHECK_TOOL and self.sudo.handles(arguments.get("request_id")):
+                return self.sudo.check(arguments["request_id"])
         if self.client is not None:
             self.refresh()
         builtin = (self.CHECK_TOOL,) + ((self.CHECK_UPDATE_TOOL, self.UPDATE_TOOL) if self.updater is not None else ())

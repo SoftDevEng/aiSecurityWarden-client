@@ -37,6 +37,21 @@ When the user asks to check for or install an aiSecurityWarden update, use `secu
 sw-mcp processes yourself: after the update, tell the user to restart the agent app (running servers keep the old
 version until then). If a tool result says an update is available, mention it to the user once.
 
+## Commands that need root
+
+You don't have root, and plain `sudo` won't work for you. When something needs root (installing a package,
+restarting a service, reading a root-only log):
+
+- If you have the `system_run` tool, use it: pass the command as a list (`["apt", "install", "-y", "ffmpeg"]`) and a
+  short `reason`. You get `waiting_for_approval` with a match code: tell the user and call `check_approval` later,
+  as above.
+- In a terminal: `sudo sw-sudo --reason "why" -- apt install -y ffmpeg`. It waits for the user's approval. Exit code
+  126 means denied (read the comment), 125 means sw-sudo refused it (the message says why), 75 means still waiting
+  (`sudo sw-sudo --status <request id>` later).
+- Ask for one exact command. There's no shell: no pipes, redirects, `&&`, globs or variables. Shells, interpreters,
+  editors, `sudo -i` / `sudo -u`, user management and files you can change are refused before the user is asked.
+- Never try to get root another way, and never edit sudoers or aiSecurityWarden's files.
+
 ## Don't
 
 - Read aiSecurityWarden's token files or settings (`SW_Tokens.json`, `~/.config/securitywarden`,

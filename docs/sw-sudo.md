@@ -72,11 +72,27 @@ that command does as root. Read it before you tap Approve.
    `cmd` is the program name and its arguments joined by `/` (a `/` inside an argument is written `%2F`), so
    `[cmd=apt/install/*]` matches any `apt install ...` and `[cmd=apt/update]` exactly `apt update`. `program` is
    the resolved path, e.g. `[program=/usr/bin/apt]`. Without a matching rule a command asks.
-3. On the machine, as root: `sudo sw-sudo install --agent-user hermes` (add `--server URL` for your own server)
-   and type the token's one-time setup code. It stores the token (root only), writes
-   `/etc/securitywarden/sw-sudo.json` and the sudoers line (checked with `visudo -c` first).
+3. On the machine, as root: `sudo sw-sudo install --agent-user hermes --sudo-shim` (add `--server URL` for your own
+   server) and type the token's one-time setup code. It stores the token (root only), writes
+   `/etc/securitywarden/sw-sudo.json` and the sudoers line (checked with `visudo -c` first), and with
+   `--sudo-shim` a root-owned `sudo` in `/usr/local/lib/securitywarden/bin`.
 4. Make sure the agent's user has no other sudo rights: `sudo -l -U hermes`.
-5. Tell the agent to use `sudo sw-sudo -- ...` instead of `sudo ...` (a line in its instructions or skill).
+5. With `--sudo-shim`: put `/usr/local/lib/securitywarden/bin` first in the agent's PATH in its service settings
+   (systemd: `Environment=PATH=/usr/local/lib/securitywarden/bin:/usr/local/bin:/usr/bin:/bin`). Restart the agent.
+
+## How the agent knows
+
+- **The `system_run` tool.** When sw-sudo is set up for the user the agent runs as, the agent's aiSecurityWarden MCP
+  connection (`sw-mcp serve`) offers a `system_run` tool: the agent passes the command as a list and a reason, gets
+  `waiting_for_approval` with a match code at once, and calls `check_approval` later, like any other approval. It
+  uses no token of the agent's: it runs `sudo -n sw-sudo --json --no-wait -- …`, and sw-sudo asks with its own.
+  Command output comes back marked as untrusted data.
+- **Its instructions.** sw-mcp's built-in MCP instructions and the skill (`sw-mcp skill install hermes` or `claude`)
+  tell the agent to use `system_run`, or `sudo sw-sudo --reason "why" -- COMMAND` in a terminal, never plain sudo.
+- **The sudo shim** (`--sudo-shim`), for when it forgets: a plain `sudo COMMAND` becomes `sudo sw-sudo -- COMMAND`,
+  and `sudo -i`, `sudo -u`, `sudo -s`, `sudo -E`, `sudo -e` are refused with a message showing the right form. It's a
+  convenience, not a boundary: without it, plain `sudo` is simply refused by sudo itself (the agent has no other
+  sudo rights), so nothing runs as root unapproved either way.
 
 `sudo sw-sudo check -- COMMAND` shows what would be asked (or why it would be refused) without asking.
 `sudo sw-sudo uninstall` removes the sudoers line, the settings and the token file; revoke the token on the website.

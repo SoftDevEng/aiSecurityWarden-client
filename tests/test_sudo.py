@@ -278,3 +278,60 @@ def test_rule_scopes_match_the_suggested_rules():
     sent = crypto.scope_macs(pkey, "cmd", scope["cmd"])
     assert crypto.scope_mac(pkey, "cmd", "apt/install/*") in sent           # [cmd=apt/install/*] matches
     assert crypto.scope_mac(pkey, "cmd", "apt/update") not in sent
+
+
+# -- --json mode (what sw-mcp's system_run reads) -----------------------------------------------
+
+def _json(c):
+    return json.loads(c.out.getvalue().strip().splitlines()[-1])
+
+
+def test_json_mode_reports_each_outcome_as_one_object(ctx, server):
+    c = ctx(json_out=True)
+    assert sudo.run(["bash"], c) == sudo.EXIT_REFUSED and _json(c)["status"] == "refused"
+    c = ctx(json_out=True)
+    assert sudo.run(["echo", "x"], c, wait=False) == sudo.EXIT_PENDING
+    w = _json(c)
+    assert w["status"] == "waiting_for_approval" and w["match"] == "47" and w["request_id"]
+    c2 = ctx(json_out=True)
+    assert sudo.status(w["request_id"], c2) == 0
+    d = _json(c2)
+    assert d == {"status": "done", "exit_code": 0, "stdout": "x\n", "stderr": "", "cut": False}
+    s = FakeServer(decision="denied")
+    c3 = ctx(json_out=True)
+    c3.client_factory = lambda cfg: s
+    assert sudo.run(["echo", "y"], c3) == sudo.EXIT_DENIED
+    assert _json(c3) == {"status": "denied", "reason": "approval_denied", "comment": "use apt-get instead"}
+
+
+# -- the sudo shim ----------------------------------------------------------------------------------
+
+def test_the_shim_routes_plain_sudo_to_sw_sudo_and_refuses_sudo_options(tmp_path):
+    import subprocess
+    fake = tmp_path / "fakesudo"
+    fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    os.chmod(fake, 0o755)
+    shim = tmp_path / "sudo"
+    shim.write_text(sudo.shim_script("/usr/local/bin/sw-sudo").replace("/usr/bin/sudo", str(fake)))
+    os.chmod(shim, 0o755)
+
+    def run(*args):
+        return subprocess.run([str(shim), *args], capture_output=True, text=True)
+    r = run("apt", "install", "-y", "ffmpeg")
+    assert r.stdout.split() == ["/usr/local/bin/sw-sudo", "--", "apt", "install", "-y", "ffmpeg"]
+    r = run("sw-sudo", "--reason", "x y", "--", "apt", "update")
+    assert r.stdout.splitlines() == ["/usr/local/bin/sw-sudo", "--reason", "x y", "--", "apt", "update"]
+    r = run("--", "echo", "$(id)")          # no shell in between: passed as an argument, not run
+    assert r.stdout.splitlines() == ["/usr/local/bin/sw-sudo", "--", "echo", "$(id)"]
+    for opt in ("-i", "-s", "-u", "-E", "-e", "--login"):
+        r = run(opt, "x")
+        assert r.returncode == sudo.EXIT_REFUSED and r.stdout == "" and "sudo sw-sudo" in r.stderr
+    assert run().returncode == sudo.EXIT_REFUSED
+
+
+def test_install_shim_is_root_owned_and_not_agent_writable(rootdir):
+    folder = os.path.join(rootdir, "lib", "bin")
+    path = sudo.install_shim("/usr/local/bin/sw-sudo", folder)
+    st = os.stat(path)
+    assert st.st_uid == 0 and oct(st.st_mode & 0o777) == "0o755"
+    assert sudo.agent_can_change(path, sudo.Agent(AGENT, frozenset())) is None

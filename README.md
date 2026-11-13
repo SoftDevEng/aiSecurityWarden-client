@@ -249,8 +249,9 @@ ends when the token is revoked or its policy changes. Details: [docs/DESIGN.md](
 
 Run your AI agent as a limited user and let it ask for root **one exact command at a time**:
 `sudo sw-sudo -- apt install -y ffmpeg`. You see the command and approve or deny it on your phone or the website;
-the agent never gets the root password. Shells, interpreters, user management and files the agent could change are
-refused before anything is asked. Set-up and the full list of guards: [docs/sw-sudo.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/sw-sudo.md).
+the agent never gets the root password. Agents connected through `sw-mcp` get a `system_run` tool for it, and
+`--sudo-shim` turns a plain `sudo COMMAND` into a request too. Shells, interpreters, user management and files the
+agent could change are refused before anything is asked. Set-up and the full list of guards: [docs/sw-sudo.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/sw-sudo.md).
 
 ### Admin window (`swadmin`)
 

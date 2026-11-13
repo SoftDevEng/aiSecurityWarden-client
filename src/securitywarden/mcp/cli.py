@@ -182,7 +182,9 @@ def _hub(args: argparse.Namespace, cfg: dict[str, Any]) -> Hub:
     url, token_file, verify = _settings(args, cfg)
     connectors = _connectors(args, cfg)
     if os.environ.get("SW_ACCESS_TOKEN") and not token_file:
-        return Hub(_client(args, cfg, wait=False), connectors, source=_source(lambda: None), updater=_updater())
+        from .sudo_tool import default_tool
+        return Hub(_client(args, cfg, wait=False), connectors, source=_source(lambda: None), updater=_updater(),
+                   sudo=default_tool())
     if url:
         try:
             _check_url(url)
@@ -215,7 +217,9 @@ def _hub(args: argparse.Namespace, cfg: dict[str, Any]) -> Hub:
             client = make(target.load())
     except SecurityWardenError as e:
         print(f"sw-mcp: {e}", file=sys.stderr, flush=True)
-    return Hub(client, connectors, setup=target, source=_source(state), tool_cache=tool_cache, updater=_updater())
+    from .sudo_tool import default_tool
+    return Hub(client, connectors, setup=target, source=_source(state), tool_cache=tool_cache, updater=_updater(),
+               sudo=default_tool())
 
 
 def _tool_cache_path(store: TokenStore, target: SetupTarget) -> str | None:

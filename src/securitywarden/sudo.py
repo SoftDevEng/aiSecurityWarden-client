@@ -108,7 +108,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "wait": 900,                  # seconds to wait for a decision before giving up (the request stays open)
     "max_output": 1024 * 1024,    # bytes of stdout and of stderr passed back
     "allow_programs": [],         # full paths allowed despite the shell-equivalent list (owner's choice)
+    "exe": None,                  # the sw-sudo the sudoers line names (for sw-mcp's system_run tool)
+    "shim": None,                 # the sudo shim's folder, if installed (install --sudo-shim)
 }
+SHIM_DIR = "/usr/local/lib/securitywarden/bin"
 
 
 class Refused(Exception):
@@ -363,6 +366,14 @@ class Context:
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     state_dir: str = STATE_DIR
+    json_out: bool = False       # --json: one JSON object on stdout instead of text (for sw-mcp's system_run)
+
+
+def _emit(ctx: Context, status: str, code: int, **data: Any) -> int:
+    """In --json mode: the outcome as one JSON line on stdout. Returns the exit code either way."""
+    if ctx.json_out:
+        print(json.dumps({"status": status, **data}), file=ctx.out)
+    return code
 
 
 def _client(cfg: dict[str, Any]) -> Any:
@@ -416,7 +427,7 @@ def run(argv: list[str], ctx: Context, *, wait: bool = True, reason: str | None 
         real = check_command(argv, agent, ctx.config.get("allow_programs") or ())
     except Refused as e:
         print(f"sw-sudo: refused: {e}", file=ctx.err)
-        return EXIT_REFUSED
+        return _emit(ctx, "refused", EXIT_REFUSED, reason=str(e))
     args = request_args(argv, real, ctx.host, user)
     client = ctx.client_factory(ctx.config)
     try:
@@ -424,14 +435,15 @@ def run(argv: list[str], ctx: Context, *, wait: bool = True, reason: str | None 
                                     scope=command_scope(argv, real))
     except ApprovalError as e:
         print(f"sw-sudo: denied by the token's rules ({e})", file=ctx.err)
-        return EXIT_DENIED
+        return _emit(ctx, "denied", EXIT_DENIED, reason="the owner's rules deny this command")
     if req["status"] == "pending":
         _save_pending(ctx, req["request_id"], {"argv": argv, "real": real, "args": args, "nonce": req["nonce"],
                                                "digest": req["digest"]})
         if not wait:
             print(f"sw-sudo: waiting for approval (match code {req['match']}). Check later with: "
                   f"sudo sw-sudo --status {req['request_id']}", file=ctx.err)
-            return EXIT_PENDING
+            return _emit(ctx, "waiting_for_approval", EXIT_PENDING, request_id=req["request_id"], match=req["match"],
+                         check_after=int(req.get("check_after") or 15))
         print(f"sw-sudo: waiting for approval (match code {req['match']})", file=ctx.err)
         status = _wait(client, req, ctx)
         if status != "approved":
@@ -461,13 +473,14 @@ def _wait(client: Any, req: dict[str, Any], ctx: Context) -> Any:
         if ctx.clock() > end:
             print(f"sw-sudo: no decision yet; still open. Check later with: sudo sw-sudo --status "
                   f"{req['request_id']}", file=ctx.err)
-            return EXIT_PENDING
+            return _emit(ctx, "waiting_for_approval", EXIT_PENDING, request_id=req["request_id"],
+                         match=req.get("match"), check_after=15)
 
 
 def _denied(e: Exception, ctx: Context) -> int:
     comment = getattr(e, "comment", None)
     print(f"sw-sudo: not approved ({e})" + (f": {comment}" if comment else ""), file=ctx.err)
-    return EXIT_DENIED
+    return _emit(ctx, "denied", EXIT_DENIED, reason=str(getattr(e, "reason", e)), comment=comment)
 
 
 def _execute(argv: list[str], real: str, args: dict[str, Any], digest: str, ctx: Context) -> int:
@@ -478,11 +491,14 @@ def _execute(argv: list[str], real: str, args: dict[str, Any], digest: str, ctx:
         now_args = request_args(argv, again, ctx.host, user)
     except (Refused, OSError) as e:
         print(f"sw-sudo: refused after approval: {e}", file=ctx.err)
-        return EXIT_REFUSED
+        return _emit(ctx, "refused", EXIT_REFUSED, reason=f"after approval: {e}")
     if again != real or crypto.action_digest(ACTION, now_args) != digest:
         print("sw-sudo: refused: the command or the program file changed after it was approved", file=ctx.err)
-        return EXIT_REFUSED
+        return _emit(ctx, "refused", EXIT_REFUSED, reason="the command or the program file changed after it was approved")
     code, out, err, cut = run_command(argv, real, int(ctx.config["command_timeout"]), int(ctx.config["max_output"]))
+    if ctx.json_out:
+        return _emit(ctx, "done", code, exit_code=code, stdout=out.decode("utf-8", "replace"),
+                     stderr=err.decode("utf-8", "replace"), cut=cut)
     return _write_out(ctx, code, out, err, cut)
 
 
@@ -496,7 +512,7 @@ def status(rid: str, ctx: Context) -> int:
             p = json.load(f)
     except (Refused, OSError, ValueError) as e:
         print(f"sw-sudo: {e}", file=ctx.err)
-        return EXIT_REFUSED
+        return _emit(ctx, "unknown", EXIT_REFUSED, reason="no request waiting with that id (finished, or never asked)")
     client = ctx.client_factory(ctx.config)
     try:
         st = client.check_action(rid, p["nonce"], p["digest"])
@@ -505,7 +521,7 @@ def status(rid: str, ctx: Context) -> int:
         return _denied(e, ctx)
     if st != "approved":
         print("sw-sudo: still waiting for approval", file=ctx.err)
-        return EXIT_PENDING
+        return _emit(ctx, "waiting_for_approval", EXIT_PENDING, request_id=rid, check_after=15)
     os.remove(path)
     return _execute(p["argv"], p["real"], p["args"], p["digest"], ctx)
 
@@ -541,10 +557,40 @@ def check_installation(agent: Agent, exe: str) -> list[str]:
     return sorted(set(problems))
 
 
+def shim_script(exe: str) -> str:
+    """A ``sudo`` for the agent's PATH: plain ``sudo CMD`` becomes ``sudo sw-sudo -- CMD`` (an approval request).
+    A convenience, not a boundary: the real sudo refuses the agent anything but sw-sudo anyway."""
+    q = shlex.quote(exe)
+    return f"""#!/bin/sh
+# aiSecurityWarden: "sudo COMMAND" from the AI agent becomes "sudo sw-sudo -- COMMAND", which asks the owner to
+# approve that exact command. Installed by: sw-sudo install --sudo-shim. The agent has no other sudo rights.
+if [ "$1" = "--" ]; then shift; fi
+case "$1" in
+  "") echo "usage: sudo COMMAND ARGS...  (each command waits for the owner's approval through aiSecurityWarden)" >&2
+      exit {EXIT_REFUSED} ;;
+  sw-sudo|{q}) shift; exec /usr/bin/sudo {q} "$@" ;;
+  -*) echo "sudo: $1 isn't available to this agent (no other users, shells or editors as root)." >&2
+      echo "For a root command, use: sudo COMMAND ARGS...  or  sudo sw-sudo --reason 'why' -- COMMAND ARGS..." >&2
+      exit {EXIT_REFUSED} ;;
+esac
+exec /usr/bin/sudo {q} -- "$@"
+"""
+
+
+def install_shim(exe: str, folder: str = SHIM_DIR) -> str:
+    os.makedirs(folder, mode=0o755, exist_ok=True)
+    for d in (folder, os.path.dirname(folder)):
+        os.chown(d, 0, 0)
+        os.chmod(d, 0o755)
+    path = os.path.join(folder, "sudo")
+    _write_root_file(path, shim_script(exe), 0o755)
+    return path
+
+
 def install(agent_user: str, server: str, *, read_code: Callable[[], str] = lambda: getpass.getpass(
         "One-time setup code from the website (Tokens → the sw-sudo token → Set up): "),
             exe: str | None = None, run_visudo: Callable[[str], bool] | None = None,
-            out: Any = sys.stdout) -> int:
+            out: Any = sys.stdout, sudo_shim: bool = False) -> int:
     from .client.setup import setup_from_code
     if os.geteuid() != 0:
         print("sw-sudo install must run as root (sudo sw-sudo install ...)", file=sys.stderr)
@@ -573,7 +619,8 @@ def install(agent_user: str, server: str, *, read_code: Callable[[], str] = lamb
         return EXIT_REFUSED
     os.chown(path, 0, 0)
     os.chmod(path, 0o600)
-    cfg = {**DEFAULT_CONFIG, "server": server, "agent_user": agent_user, "agent_uid": pw.pw_uid, "token_file": path}
+    cfg = {**DEFAULT_CONFIG, "server": server, "agent_user": agent_user, "agent_uid": pw.pw_uid, "token_file": path,
+           "exe": exe, "shim": SHIM_DIR if sudo_shim else None}
     _write_root_file(CONFIG_PATH, json.dumps(cfg, indent=1) + "\n", 0o644)
     line = f"# aiSecurityWarden: the agent asks for root one command at a time (sw-sudo)\n" \
            f"{agent_user} ALL=(root) NOPASSWD: {exe}\n"
@@ -585,12 +632,23 @@ def install(agent_user: str, server: str, *, read_code: Callable[[], str] = lamb
         print("sw-sudo: visudo refused the sudoers line; nothing changed in sudoers", file=sys.stderr)
         return EXIT_REFUSED
     os.replace(tmp, SUDOERS_PATH)
+    shim_note = ""
+    if sudo_shim:
+        shim = install_shim(exe)
+        why = agent_can_change(shim, agent)
+        if why:
+            print(f"sw-sudo: the sudo shim can be changed by the agent ({why}); remove it", file=sys.stderr)
+        shim_note = (f"\n\nsudo shim: {shim}. Put {SHIM_DIR} first in the agent's PATH, in its service settings,\n"
+                     f"e.g. for a systemd service: Environment=PATH={SHIM_DIR}:/usr/local/bin:/usr/bin:/bin\n"
+                     f"Then a plain 'sudo COMMAND' from the agent asks for approval too.")
     print(f"Set up. {agent_user} can now run: sudo sw-sudo -- COMMAND ARGS...\n"
           f"Token {cred.id} stored in {path} (root only).\n\n"
           "On the website, for this token: turn session approval off (it reads no secrets; every command is\n"
           "approved by its action rules) and add rules like these (first match wins):\n  "
           + "\n  ".join(SUGGESTED_RULES)
-          + f"\n\nCheck that {agent_user} has no other sudo rights (sudo -l -U {agent_user}).", file=out)
+          + f"\n\nCheck that {agent_user} has no other sudo rights (sudo -l -U {agent_user}).\n"
+          "The agent's aiSecurityWarden MCP connection (sw-mcp) now offers it a system_run tool for root commands;\n"
+          "restart the agent so it sees it." + shim_note, file=out)
     return 0
 
 
@@ -607,7 +665,7 @@ def uninstall() -> int:
     if os.geteuid() != 0:
         print("sw-sudo uninstall must run as root", file=sys.stderr)
         return EXIT_REFUSED
-    for p in (SUDOERS_PATH, CONFIG_PATH, TOKEN_PATH):
+    for p in (SUDOERS_PATH, CONFIG_PATH, TOKEN_PATH, os.path.join(SHIM_DIR, "sudo")):
         try:
             os.remove(p)
             print(f"removed {p}")
@@ -630,18 +688,21 @@ def main(argv: list[str] | None = None) -> int:
         p = argparse.ArgumentParser(prog="sw-sudo install", description="Set sw-sudo up (as root).")
         p.add_argument("--agent-user", required=True, help="the limited user the AI agent runs as")
         p.add_argument("--server", default="https://app.aisecuritywarden.com")
+        p.add_argument("--sudo-shim", action="store_true",
+                       help=f"also install a 'sudo' in {SHIM_DIR} that turns plain 'sudo COMMAND' into sw-sudo")
         a = p.parse_args(argv[1:])
-        return install(a.agent_user, a.server)
+        return install(a.agent_user, a.server, sudo_shim=a.sudo_shim)
     if argv[:1] == ["uninstall"]:
         return uninstall()
     p = argparse.ArgumentParser(
         prog="sw-sudo", usage="sudo sw-sudo [--no-wait] [--reason TEXT] -- COMMAND ARGS...\n"
                               "       sudo sw-sudo --status REQUEST_ID\n       sudo sw-sudo check -- COMMAND ARGS...\n"
-                              "       sudo sw-sudo install --agent-user USER [--server URL]",
+                              "       sudo sw-sudo install --agent-user USER [--server URL] [--sudo-shim]",
         description="Run one command as root after a person approves it in aiSecurityWarden.")
     p.add_argument("--no-wait", action="store_true", help="ask and return at once (exit 75 while waiting)")
     p.add_argument("--reason", help="a short note shown to the person deciding (why the agent needs it)")
     p.add_argument("--status", metavar="REQUEST_ID", help="run a request left waiting, if it was approved since")
+    p.add_argument("--json", action="store_true", help="print one JSON object with the outcome (for sw-mcp)")
     p.add_argument("command", nargs=argparse.REMAINDER)
     a = p.parse_args(argv)
     cmd = a.command[1:] if a.command[:1] == ["--"] else a.command
@@ -650,7 +711,8 @@ def main(argv: list[str] | None = None) -> int:
     except Refused as e:
         print(f"sw-sudo: {e}", file=sys.stderr)
         return EXIT_REFUSED
-    ctx = Context(euid=os.geteuid(), sudo_uid=os.environ.get("SUDO_UID"), config=cfg, client_factory=_client)
+    ctx = Context(euid=os.geteuid(), sudo_uid=os.environ.get("SUDO_UID"), config=cfg, client_factory=_client,
+                  json_out=a.json)
     if a.status:
         return status(a.status, ctx)
     if cmd[:1] == ["check"]:
