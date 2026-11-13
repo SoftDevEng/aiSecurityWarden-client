@@ -245,6 +245,14 @@ to approve this session (match code 47, up to 120 s)...`); approve only if the p
 the same code. An approval works once, only for the process and address that asked, and
 ends when the token is revoked or its policy changes. Details: [docs/DESIGN.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/DESIGN.md#human-approval).
 
+### Root commands with approval (`sw-sudo`, Linux)
+
+Run your AI agent as a limited user and let it ask for root **one exact command at a time**:
+`sudo sw-sudo -- apt install -y ffmpeg`. You see the command and approve or deny it on your phone or the website;
+the agent never gets the root password. Agents connected through `sw-mcp` get a `system_run` tool for it, and
+`--sudo-shim` turns a plain `sudo COMMAND` into a request too. Shells, interpreters, user management and files the
+agent could change are refused before anything is asked. Set-up and the full list of guards: [docs/sw-sudo.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/sw-sudo.md).
+
 ### Admin window (`swadmin`)
 
 If you would rather not use a terminal, `swadmin` opens a small desktop window that does
