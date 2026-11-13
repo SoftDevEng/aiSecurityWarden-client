@@ -48,6 +48,9 @@ this package; run them there before releasing a change here.
 - Releases are tagged `vX.Y.Z[.devN]`; the server pins a tag. A `v*` tag publishes to PyPI as `aisecuritywarden`
   (`.github/workflows/release.yml`, trusted publishing); the tag must equal `__version__`. PyPI files can't be
   replaced: a mistake means a new version.
+- Release order: bump `__version__` and both `server.json` versions, merge, tag `vX.Y.Z` (the owner pushes tags;
+  sessions open PRs only), PyPI publishes, then `mcp-publisher login github` + `publish`. Then the server is built and
+  deployed; the full process is `docs/RELEASE.md` in the server repo.
 - `server.json` is the official MCP Registry entry (`io.github.SoftDevEng/aisecuritywarden`; ownership is the
   `mcp-name` comment at the top of README.md). Bump its two `version` fields with `__version__`
   (`tests/test_readme.py` checks); after PyPI has the release, `mcp-publisher login github` and `mcp-publisher publish`.
