@@ -4,4 +4,4 @@ Secrets are end-to-end encrypted: the server stores only ciphertext and never
 sees the key material needed to decrypt it.
 """
 
-__version__ = "0.7.5"
+__version__ = "0.7.6"
