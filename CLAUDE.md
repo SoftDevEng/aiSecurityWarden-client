@@ -48,5 +48,8 @@ this package; run them there before releasing a change here.
 - Releases are tagged `vX.Y.Z[.devN]`; the server pins a tag. A `v*` tag publishes to PyPI as `aisecuritywarden`
   (`.github/workflows/release.yml`, trusted publishing); the tag must equal `__version__`. PyPI files can't be
   replaced: a mistake means a new version.
+- `server.json` is the official MCP Registry entry (`io.github.SoftDevEng/aisecuritywarden`; ownership is the
+  `mcp-name` comment at the top of README.md). Bump its two `version` fields with `__version__`
+  (`tests/test_readme.py` checks); after PyPI has the release, `mcp-publisher login github` and `mcp-publisher publish`.
 - Installs as `aisecuritywarden` (PyPI), imports as `securitywarden`. User-facing text says "aiSecurityWarden". The
   `securitywarden/v1/...` labels in crypto.py and the config folders never change (existing data depends on them).

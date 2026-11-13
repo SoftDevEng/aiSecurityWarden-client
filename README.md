@@ -1,5 +1,7 @@
 # aiSecurityWarden client
 
+<!-- mcp-name: io.github.SoftDevEng/aisecuritywarden -->
+
 The open-source client for **[aiSecurityWarden](https://aisecuritywarden.com)**, a secrets service with **scoped,
 revocable machine tokens**, **end-to-end encryption** and **human approval** for AI agents. Built so AI agents
 (like [Hermes Agent](https://hermes-agent.nousresearch.com)) and other unattended services can fetch API keys at

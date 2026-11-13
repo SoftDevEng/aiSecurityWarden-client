@@ -1,0 +1,46 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.SoftDevEng/aisecuritywarden",
+  "title": "aiSecurityWarden",
+  "description": "Human approval for AI agents: E2E-encrypted secrets and gated Gmail, GitHub and MCP tools.",
+  "websiteUrl": "https://aisecuritywarden.com",
+  "repository": {
+    "url": "https://github.com/SoftDevEng/aiSecurityWarden-client",
+    "source": "github"
+  },
+  "version": "0.7.4",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "aisecuritywarden",
+      "version": "0.7.4",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "serve"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "SW_SERVER_URL",
+          "description": "Your aiSecurityWarden server",
+          "isRequired": true,
+          "default": "https://app.aisecuritywarden.com"
+        },
+        {
+          "name": "SW_TOKEN_NAME",
+          "description": "The machine token's name on the website (its setup step shows it)"
+        },
+        {
+          "name": "SW_TOKEN_ID",
+          "description": "The machine token's id (its setup step shows it)"
+        }
+      ]
+    }
+  ]
+}
