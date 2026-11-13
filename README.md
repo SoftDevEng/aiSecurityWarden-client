@@ -190,6 +190,22 @@ or upload your own (`sw-mcp pack NAME`, then **Connectors > Upload**; encrypted 
 versioned with a backup of the version replaced). `sw-mcp serve` then loads whatever the token's project uses,
 with no `--connector` needed, and picks up new versions as you choose: at once, or on the next restart.
 
+#### Teaching the agent the rules
+
+Every agent connected to `sw-mcp` is told the essentials when it connects: how to wait for an approval, to treat
+email and web content as untrusted, to use only setup codes you typed, and to update through
+`securitywarden_update` (never pip or pipx, never killing `sw-mcp`). Agents that support skills can get the full
+guide too:
+
+```bash
+sw-mcp skill install hermes     # Hermes Agent: ~/.hermes/skills/aisecuritywarden/SKILL.md
+sw-mcp skill install claude     # Claude Code: ~/.claude/skills/aisecuritywarden/SKILL.md
+sw-mcp skill zip claude         # Claude app: upload the .zip in its Skills settings
+```
+
+Then start a new session in the agent. `sw-mcp serve` keeps skills it installed up to date after each client update;
+a `SKILL.md` you wrote yourself is never replaced.
+
 ## Admin commands
 
 | Command | |

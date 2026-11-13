@@ -8,6 +8,7 @@
     sw-mcp setup --token-file ~/.config/securitywarden/gmail-token   # store the token from a setup code
     sw-mcp pack notes                                # pack a connector to upload on the website
     sw-mcp update [--check]                          # install the newest signed aiSecurityWarden client
+    sw-mcp skill install hermes                      # teach the agent the rules (also: claude; show; zip)
 
 Connectors turned on for the token's project on the aiSecurityWarden website (Connectors) are loaded too, and
 updated while running when uploaded with "go live now" (SW_MCP_REMOTE=0 turns this off).
@@ -253,6 +254,9 @@ def _versions_path(store: TokenStore, target: SetupTarget) -> str:
 
 def cmd_serve(args: argparse.Namespace) -> None:
     cfg = _config(args)
+    from .skills import refresh_installed
+    for path in refresh_installed():          # skills from `sw-mcp skill install` follow client updates
+        print(f"sw-mcp: refreshed the agent skill {path} for this version", file=sys.stderr, flush=True)
     hub = _hub(args, cfg)
     if hub.client is None:
         print("sw-mcp: no token yet: the agent can set up with a one-time code (securitywarden_setup), or run "
@@ -697,6 +701,28 @@ def cmd_update(args: argparse.Namespace) -> None:
     sys.exit(run_cli(_client(args, cfg), check_only=args.check, yes=args.yes, prog="sw-mcp"))
 
 
+def cmd_skill(args: argparse.Namespace) -> None:
+    """Show, install or zip the skill that teaches an agent how to use these tools (see mcp/skills)."""
+    from .skills import NAME, SkillError, install, text, zip_bytes
+    try:
+        if args.action == "show":
+            sys.stdout.write(text(args.agent))
+        elif args.action == "zip":
+            out = args.output or f"{NAME}-skill.zip"
+            with open(out, "wb") as f:
+                f.write(zip_bytes(args.agent))
+            print(f"Wrote {out}. Upload it in the Claude app's Skills settings." if args.agent == "claude"
+                  else f"Wrote {out}.")
+        else:
+            path, status = install(args.agent, args.dir, force=args.force)
+            print({"installed": f"Installed {path}.", "updated": f"Updated {path}.",
+                   "unchanged": f"{path} is already current."}[status])
+            if status != "unchanged":
+                print("Start a new session in the agent so it reads the skill.")
+    except (SkillError, OSError) as e:
+        _die(str(e))
+
+
 def cmd_login(args: argparse.Namespace) -> None:
     cls = load_connector(args.connector_name)
     login = getattr(cls, "login", None)
@@ -775,6 +801,14 @@ def main(argv: list[str] | None = None) -> None:
     up.add_argument("--check", action="store_true", help="only say whether an update is available (exit 2 if so)")
     up.add_argument("--yes", action="store_true", help="don't ask before installing")
     up.set_defaults(fn=cmd_update)
+    sk = sub.add_parser("skill", help="teach your agent to use these tools: show, install or zip a skill")
+    sk.add_argument("action", choices=["show", "install", "zip"])
+    sk.add_argument("agent", choices=["hermes", "claude"],
+                    help="hermes: Hermes Agent; claude: Claude Code (install) or the Claude app (zip)")
+    sk.add_argument("--dir", help="install into this folder instead of the agent's skills folder")
+    sk.add_argument("--force", action="store_true", help="replace a SKILL.md there that this command didn't write")
+    sk.add_argument("-o", "--output", help="zip: the file to write (default: aisecuritywarden-skill.zip)")
+    sk.set_defaults(fn=cmd_skill)
     lg = sub.add_parser("login", help="one-time sign-in for a connector (e.g. gmail)")
     lg.add_argument("connector_name")
     common(lg, connectors=False)
