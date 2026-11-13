@@ -8,13 +8,13 @@
     "url": "https://github.com/SoftDevEng/aiSecurityWarden-client",
     "source": "github"
   },
-  "version": "0.7.4",
+  "version": "0.7.5",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "aisecuritywarden",
-      "version": "0.7.4",
+      "version": "0.7.5",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
