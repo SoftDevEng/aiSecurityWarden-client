@@ -116,6 +116,27 @@ secret; the token itself never goes in the MCP settings.
 - "Reply to Bob that the invoice is paid." You're asked with the recipient, subject and text. The agent says
   it's waiting; after you approve, it calls `check_approval` and the email is sent. Deny it and nothing is sent.
 
+- "Read the PDF Bob sent and reply with a summary as summary.md." Reading runs straight away; the reply asks you,
+  with each attachment's name, size, type and the start of its SHA-256 in the request.
+
+## Attachments (client 0.7.7)
+
+- **Reading**: `gmail_read` lists each attachment with its `part`; `gmail_attachment` (`gmail.read.attachment`,
+  low risk, allowed by the suggested `gmail.read.*` rule) returns its text: plain text, CSV, Markdown, HTML, Word
+  `.docx`, and PDF when the agent machine has the pdf extra (`pip install "aisecuritywarden[pdf]"`, or
+  `pipx inject aisecuritywarden pypdf`). Long text comes in pieces (`offset`). PDFs are read in a separate process
+  with a 20-second limit, so a hostile PDF can't hang `sw-mcp`. Images and other files have no text; they can still
+  be forwarded or attached.
+- **Sending**: `gmail_send`, `gmail_reply`, `gmail_forward` and `gmail_draft` take `attachments`, at most 10 and
+  18 MB together: `{"name", "text"}` for text the agent wrote, `{"name", "base64"}` for a small file (1 MB), or
+  `{"message_id", "part"}` (optional `name`) for an attachment of an email in the mailbox.
+- What you approve is exactly the files: each file's SHA-256 is part of the action's digest. A file taken from an
+  email is fetched again when the action runs and refused if it changed.
+- File types Gmail blocks (`.exe`, `.js`, `.bat`, …), zips holding them or protected by a password, and archives
+  Gmail can't look into (`.7z`, `.rar`, …) are refused before you're asked. Names lose folders, quotes and line
+  breaks; the type comes from the extension.
+- Not yet: big files as Google Drive links, and files from the agent machine's disk.
+
 ## Good to know
 
 - Emails are shown to the agent as untrusted data with a warning not to follow instructions inside them.

@@ -27,6 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+pdf = ["pypdf>=4"]          # gmail_attachment reads PDF text (in a separate process with a time limit)
 
 [project.scripts]
 swctl = "securitywarden.client.cli:main"

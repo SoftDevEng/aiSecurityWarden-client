@@ -6,9 +6,14 @@ Secrets (in the token's aiSecurityWarden project): GMAIL_CLIENT_ID, GMAIL_CLIENT
 Actions and their risk (the token's rules in aiSecurityWarden decide what asks a person):
 
     gmail.read.search / .message / .thread / .labels   low     reading
+    gmail.read.attachment                                low     an attachment's text (PDF needs the pdf extra)
     gmail.label, gmail.archive, gmail.mark_read         low     organizing (a time window may cover these)
     gmail.draft                                          medium  a draft the user sends themselves
     gmail.send, gmail.reply, gmail.forward, gmail.trash  high    always one approval each
+
+Send, reply, forward and draft take ``attachments``: text or a small base64 file the AI made, or an attachment of
+an email in the mailbox (``message_id`` + ``part`` from gmail_read). Each file's name, size and SHA-256 are part
+of what a person approves; an attachment from the mailbox is fetched again and checked when the action runs.
 
 Everything read from the mailbox goes back to the AI marked as untrusted data.
 """
@@ -18,6 +23,7 @@ from __future__ import annotations
 import base64
 import email.utils
 import getpass
+import hashlib
 import html
 import http.server
 import json
@@ -27,6 +33,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import uuid
 import webbrowser
 from email.message import EmailMessage
 from html.parser import HTMLParser
@@ -35,14 +42,18 @@ from typing import Any
 import httpx
 
 from .. import crypto
+from . import mailfiles
 from .framework import Connector, Plan, Summary, ToolError, tool, untrusted
 
 API = "https://gmail.googleapis.com/gmail/v1/users/me"
+UPLOAD = "https://gmail.googleapis.com/upload/gmail/v1/users/me"
+UPLOAD_OVER = 4_000_000              # bytes of email: bigger ones go through Gmail's upload endpoint
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCOPES = ("https://www.googleapis.com/auth/gmail.modify",)   # read, organize, draft, send, trash (no permanent delete)
 
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+PART_RE = re.compile(r"^[0-9]{1,4}(\.[0-9]{1,4}){0,7}$")
 ADDR_RE = re.compile(r"^[^@\s<>,;\"]+@[^@\s<>,;\"]+\.[^@\s<>,;\"]+$")
 MAX_IDS = 100
 MAX_RECIPIENTS = 50
@@ -56,6 +67,14 @@ _ADDRS = {"type": "array", "items": {"type": "string"}, "description": "Email ad
 _MID = {"type": "string", "description": "A Gmail message id (from gmail_search)."}
 _SUBJECT = {"type": "string", "description": "Subject line (one line)."}
 _BODY = {"type": "string", "description": "Plain-text body."}
+_PART = {"type": "string", "description": "The attachment's part, as gmail_read lists it (e.g. \"1\")."}
+_FILES = {"type": "array", "maxItems": mailfiles.MAX_FILES, "description": (
+    "Files to attach (at most 10, 18 MB together). Each is one of: {\"name\": \"summary.md\", \"text\": \"...\"} for "
+    "text you wrote; {\"name\": \"chart.png\", \"base64\": \"...\"} for a small file (1 MB); or {\"message_id\": "
+    "\"...\", \"part\": \"1\"} (optional \"name\") for an attachment of an email, as gmail_read lists it."),
+    "items": {"type": "object", "additionalProperties": False, "properties": {
+        "name": {"type": "string"}, "text": {"type": "string"}, "base64": {"type": "string"},
+        "message_id": {"type": "string"}, "part": {"type": "string"}}}}
 
 
 class Gmail(Connector):
@@ -98,7 +117,8 @@ class Gmail(Connector):
         out = [self._overview(m["id"]) for m in r.get("messages", [])]
         return untrusted({"messages": out, "more": bool(r.get("nextPageToken"))}, "Gmail")
 
-    @tool("Read one email: headers, text and the names of its attachments.", action="gmail.read.message",
+    @tool("Read one email: headers, text and its attachments (name, type, size and part; read one with "
+          "gmail_attachment).", action="gmail.read.message",
           risk="low", params={"message_id": {"type": "string"}}, required=["message_id"])
     def read(self, message_id: str) -> Plan:
         _check_id(message_id)
@@ -125,6 +145,34 @@ class Gmail(Connector):
     def _list_labels(self, a: dict[str, Any]) -> Any:
         self._labels = None
         return untrusted({"labels": sorted(self._label_ids())}, "Gmail")
+
+    @tool("Read the text of an email's attachment (text, CSV, Markdown, HTML, PDF, Word .docx). Long text comes "
+          "in pieces: pass offset to read on.", action="gmail.read.attachment", risk="low",
+          params={"message_id": _MID, "part": _PART,
+                  "offset": {"type": "integer", "minimum": 0, "maximum": 100_000_000,
+                             "description": "Character to start at (default 0)."}},
+          required=["message_id", "part"])
+    def attachment(self, message_id: str, part: str, offset: int = 0) -> Plan:
+        _check_id(message_id)
+        _check_part(part)
+        return Plan({"id": message_id, "part": part, "offset": offset},
+                    Summary("Read an attachment", [("Message", message_id), ("Part", part)]), self._attachment)
+
+    def _attachment(self, a: dict[str, Any]) -> Any:
+        info, data = self._part(a["id"], a["part"], limit=mailfiles.MAX_READ_FILE)
+        out: dict[str, Any] = {"message_id": a["id"], "part": a["part"], "name": info["name"], "type": info["type"],
+                               "size": len(data)}
+        text, how = mailfiles.read_text(info["name"], info["type"], data, _html_text)
+        if text is None:
+            out["text"] = None
+            out["note"] = how
+            return untrusted(out, "Gmail attachment")
+        start = min(a["offset"], len(text))
+        piece = text[start:start + MAX_READ]
+        out.update({"text": piece, "offset": start, "length": len(text)})
+        if start + len(piece) < len(text):
+            out["next_offset"] = start + len(piece)
+        return untrusted(out, "Gmail attachment")
 
     # -- organizing ------------------------------------------------------------------------
 
@@ -175,25 +223,31 @@ class Gmail(Connector):
     # -- writing ---------------------------------------------------------------------------
 
     @tool("Send a new email.", action="gmail.send", risk="high",
-          params={"to": _ADDRS, "subject": _SUBJECT, "body": _BODY, "cc": _ADDRS, "bcc": _ADDRS},
+          params={"to": _ADDRS, "subject": _SUBJECT, "body": _BODY, "cc": _ADDRS, "bcc": _ADDRS,
+                  "attachments": _FILES},
           required=["to", "subject", "body"])
     def send(self, to: list[str], subject: str, body: str, cc: list[str] | None = None,
-             bcc: list[str] | None = None) -> Plan:
+             bcc: list[str] | None = None, attachments: list[dict[str, Any]] | None = None) -> Plan:
         a = _mail_args(to, cc or [], bcc or [], subject, body)
+        a["files"] = self._files(attachments)
         return Plan(a, _mail_summary("Send an email", a), self._send)
 
     @tool("Save a draft in Gmail for the user to review and send themselves.", action="gmail.draft", risk="medium",
-          params={"to": _ADDRS, "subject": _SUBJECT, "body": _BODY, "cc": _ADDRS},
+          params={"to": _ADDRS, "subject": _SUBJECT, "body": _BODY, "cc": _ADDRS, "attachments": _FILES},
           required=["to", "subject", "body"])
-    def draft(self, to: list[str], subject: str, body: str, cc: list[str] | None = None) -> Plan:
+    def draft(self, to: list[str], subject: str, body: str, cc: list[str] | None = None,
+              attachments: list[dict[str, Any]] | None = None) -> Plan:
         a = _mail_args(to, cc or [], [], subject, body)
+        a["files"] = self._files(attachments)
         return Plan(a, _mail_summary("Save a draft", a), self._draft)
 
     @tool("Reply to an email (to its sender, or everyone with reply_all).", action="gmail.reply", risk="high",
           params={"message_id": _MID, "body": _BODY,
-                  "reply_all": {"type": "boolean", "description": "Also reply to everyone in To and Cc. Default false."}},
+                  "reply_all": {"type": "boolean", "description": "Also reply to everyone in To and Cc. Default false."},
+                  "attachments": _FILES},
           required=["message_id", "body"])
-    def reply(self, message_id: str, body: str, reply_all: bool = False) -> Plan:
+    def reply(self, message_id: str, body: str, reply_all: bool = False,
+              attachments: list[dict[str, Any]] | None = None) -> Plan:
         _check_id(message_id)
         m = self._get(f"/messages/{message_id}", params={"format": "metadata", "metadataHeaders": [
             "From", "Reply-To", "To", "Cc", "Subject", "Message-ID", "References"]})
@@ -208,24 +262,104 @@ class Gmail(Connector):
         if not subject.lower().startswith("re:"):
             subject = f"Re: {subject}".strip()
         a = _mail_args(to, cc, [], subject, body)
+        a["files"] = self._files(attachments)
         refs = " ".join(x for x in (h.get("references", ""), h.get("message-id", "")) if x).strip()
         a.update({"thread_id": m.get("threadId", ""), "in_reply_to": h.get("message-id", ""), "references": refs[-2000:]})
         return Plan(a, _mail_summary("Reply to an email", a), self._send)
 
-    @tool("Forward an email (with its attachments) to new recipients, with an optional note.",
+    @tool("Forward an email (with its attachments) to new recipients, with an optional note and extra files.",
           action="gmail.forward", risk="high",
           params={"message_id": _MID, "to": _ADDRS,
-                  "note": {"type": "string", "description": "Optional text above the forwarded email."}},
+                  "note": {"type": "string", "description": "Optional text above the forwarded email."},
+                  "attachments": _FILES},
           required=["message_id", "to"])
-    def forward(self, message_id: str, to: list[str], note: str = "") -> Plan:
+    def forward(self, message_id: str, to: list[str], note: str = "",
+                attachments: list[dict[str, Any]] | None = None) -> Plan:
         _check_id(message_id)
         m = self._get(f"/messages/{message_id}", params={"format": "metadata", "metadataHeaders": ["From", "Subject"]})
         h = _headers(m)
         a = _mail_args(to, [], [], f"Fwd: {_one_line(h.get('subject', ''))}".strip(), note)
+        a["files"] = self._files(attachments)
         a["forward_id"] = message_id
         s = _mail_summary("Forward an email", a)
-        fields = list(s.fields) + [("Original from", h.get("from", "")), ("Attachments", "the original email, in full")]
+        fields = list(s.fields) + [("Original from", h.get("from", "")), ("Forwarding", "the original email, in full")]
         return Plan(a, Summary(s.title, fields, s.preview), self._send)
+
+    def _files(self, items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        """Checked attachments for ``Plan.args``. Text and base64 files carry their bytes (so the digest covers
+        them); an attachment from the mailbox carries its SHA-256 and is fetched again when the action runs."""
+        items = items or []
+        if not isinstance(items, list) or len(items) > mailfiles.MAX_FILES:
+            raise ToolError(f"At most {mailfiles.MAX_FILES} attachments.")
+        out: list[dict[str, Any]] = []
+        total = 0
+        for i, it in enumerate(items, 1):
+            if not isinstance(it, dict) or set(it) - {"name", "text", "base64", "message_id", "part"}:
+                raise ToolError(f"Attachment {i}: use name + text, name + base64, or message_id + part.")
+            if any(not isinstance(v, str) for v in it.values()):
+                raise ToolError(f"Attachment {i}: every value is a string.")
+            kinds = [k for k in ("text", "base64", "message_id") if k in it]
+            if len(kinds) != 1 or ("part" in it) != ("message_id" in it):
+                raise ToolError(f"Attachment {i}: give exactly one of text, base64, or message_id + part.")
+            try:
+                if "message_id" in it:
+                    _check_id(it["message_id"])
+                    _check_part(it["part"])
+                    info, data = self._part(it["message_id"], it["part"], limit=mailfiles.MAX_TOTAL)
+                    name = mailfiles.clean_name(it.get("name") or info["name"])
+                    entry: dict[str, Any] = {"message_id": it["message_id"], "part": it["part"]}
+                else:
+                    name = mailfiles.clean_name(it.get("name", ""))
+                    if "text" in it:
+                        data = it["text"].encode("utf-8")
+                    else:
+                        data = _unb64(it["base64"], i)
+                    if len(data) > mailfiles.MAX_INLINE:
+                        raise ToolError(f"Attachment {i} ({name}) is over 1 MB; files that big can't be passed "
+                                        "inline.")
+                    entry = {"data": base64.b64encode(data).decode("ascii")}
+                mailfiles.check_sendable(name, data)
+            except mailfiles.FileProblem as e:
+                raise ToolError(f"Attachment {i}: {e}") from None
+            total += len(data)
+            if total > mailfiles.MAX_TOTAL:
+                raise ToolError("The attachments are over 18 MB together, more than Gmail can send. (Google Drive "
+                                "links for big files are planned.)")
+            entry.update({"name": name, "type": mailfiles.mime_type(name), "size": len(data),
+                          "sha256": hashlib.sha256(data).hexdigest()})
+            out.append(entry)
+        if len({f["name"].lower() for f in out}) != len(out):
+            raise ToolError("Two attachments have the same name; give each its own.")
+        return out
+
+    def _file_bytes(self, f: dict[str, Any]) -> bytes:
+        if "data" in f:
+            data = base64.b64decode(f["data"])
+        else:
+            _, data = self._part(f["message_id"], f["part"], limit=mailfiles.MAX_TOTAL)
+        if len(data) != f["size"] or hashlib.sha256(data).hexdigest() != f["sha256"]:
+            raise ToolError(f"{f['name']} changed after it was approved, so nothing was sent. Ask again.")
+        return data
+
+    def _part(self, mid: str, part: str, limit: int) -> tuple[dict[str, str], bytes]:
+        """One attachment of an email by its part id (stable, unlike Gmail's attachment ids)."""
+        m = self._get(f"/messages/{mid}", params={"format": "full"})
+        p = _find_part(m.get("payload", {}), part)
+        if p is None or not p.get("filename"):
+            raise ToolError(f"That email has no attachment in part {part!r}. Use gmail_read to see its parts.")
+        body = p.get("body", {})
+        if int(body.get("size", 0) or 0) > limit:
+            raise ToolError(f"{p['filename']} is too large ({mailfiles.size_text(int(body['size']))}).")
+        if body.get("data"):
+            raw = body["data"]
+        elif body.get("attachmentId"):
+            raw = self._get(f"/messages/{mid}/attachments/{body['attachmentId']}").get("data", "")
+        else:
+            raw = ""
+        data = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+        if len(data) > limit:
+            raise ToolError(f"{p['filename']} is too large ({mailfiles.size_text(len(data))}).")
+        return {"name": p["filename"], "type": (p.get("mimeType") or "application/octet-stream").lower()}, data
 
     def _mime(self, a: dict[str, Any]) -> EmailMessage:
         msg = EmailMessage()
@@ -239,6 +373,9 @@ class Gmail(Connector):
             msg["In-Reply-To"] = a["in_reply_to"]
             msg["References"] = a.get("references") or a["in_reply_to"]
         msg.set_content(a["body"])
+        for f in a.get("files", []):
+            maintype, _, subtype = f["type"].partition("/")
+            msg.add_attachment(self._file_bytes(f), maintype=maintype, subtype=subtype, filename=f["name"])
         if a.get("forward_id"):
             raw = self._get(f"/messages/{a['forward_id']}", params={"format": "raw"})["raw"]
             msg.add_attachment(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)), maintype="message",
@@ -246,15 +383,37 @@ class Gmail(Connector):
         return msg
 
     def _send(self, a: dict[str, Any]) -> Any:
-        body: dict[str, Any] = {"raw": _b64(self._mime(a).as_bytes())}
-        if a.get("thread_id"):
-            body["threadId"] = a["thread_id"]
-        r = self._post("/messages/send", body)
-        return {"sent": True, "message_id": r.get("id"), "thread_id": r.get("threadId")}
+        raw = self._mime(a).as_bytes()
+        meta: dict[str, Any] = {"threadId": a["thread_id"]} if a.get("thread_id") else {}
+        if len(raw) > UPLOAD_OVER:
+            r = self._upload("/messages/send", raw, meta)
+        else:
+            r = self._post("/messages/send", {"raw": _b64(raw), **meta})
+        out = {"sent": True, "message_id": r.get("id"), "thread_id": r.get("threadId")}
+        if a.get("files"):
+            out["attachments"] = len(a["files"])
+        return out
 
     def _draft(self, a: dict[str, Any]) -> Any:
-        r = self._post("/drafts", {"message": {"raw": _b64(self._mime(a).as_bytes())}})
+        raw = self._mime(a).as_bytes()
+        if len(raw) > UPLOAD_OVER:
+            r = self._upload("/drafts", raw, {})
+        else:
+            r = self._post("/drafts", {"message": {"raw": _b64(raw)}})
         return {"draft_saved": True, "draft_id": r.get("id"), "note": "The user can review and send it from Gmail."}
+
+    def _upload(self, path: str, raw: bytes, meta: dict[str, Any]) -> dict[str, Any]:
+        """A big email through Gmail's upload endpoint (a JSON body is limited to a few MB)."""
+        if path == "/drafts":
+            meta = {"message": meta}
+        boundary = "sw-" + uuid.uuid4().hex
+        while boundary.encode() in raw:
+            boundary = "sw-" + uuid.uuid4().hex
+        content = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{json.dumps(meta)}\r\n"
+                   f"--{boundary}\r\nContent-Type: message/rfc822\r\n\r\n").encode() + raw + \
+            f"\r\n--{boundary}--\r\n".encode()
+        return self._call("POST", path, base=UPLOAD, params={"uploadType": "multipart"}, content=content,
+                          extra_headers={"Content-Type": f"multipart/related; boundary={boundary}"})
 
     # -- helpers ---------------------------------------------------------------------------
 
@@ -328,14 +487,18 @@ class Gmail(Connector):
         self._access_exp = time.monotonic() + max(0, int(data.get("expires_in", 3600)) - 60)
         return self._access
 
-    def _call(self, method: str, path: str, **kw: Any) -> dict[str, Any]:
+    def _call(self, method: str, path: str, base: str = API, extra_headers: dict[str, str] | None = None,
+              **kw: Any) -> dict[str, Any]:
         for attempt in (1, 2):
-            r = self.http.request(method, API + path, headers={"Authorization": f"Bearer {self._token()}"}, **kw)
+            r = self.http.request(method, base + path,
+                                  headers={"Authorization": f"Bearer {self._token()}", **(extra_headers or {})}, **kw)
             if r.status_code == 401 and attempt == 1:
                 self._access = None
                 continue
             if r.status_code == 404:
                 raise ToolError("Gmail says that message, thread or label doesn't exist.")
+            if r.status_code == 413:
+                raise ToolError("Gmail says the email is too large.")
             if r.status_code == 429 or r.status_code >= 500:
                 raise ToolError(f"Gmail is busy or unavailable ({r.status_code}); try again in a minute.")
             if r.status_code >= 400:
@@ -421,6 +584,33 @@ def _check_id(mid: str) -> str:
     return mid
 
 
+def _check_part(part: str) -> str:
+    if not isinstance(part, str) or not PART_RE.match(part):
+        raise ToolError(f"{part!r} isn't an attachment part (use the part from gmail_read, like \"1\").")
+    return part
+
+
+def _find_part(payload: dict[str, Any], part: str) -> dict[str, Any] | None:
+    stack = [payload]
+    while stack:
+        p = stack.pop()
+        if p.get("partId") == part:
+            return p
+        stack.extend(p.get("parts", []) or [])
+    return None
+
+
+def _unb64(text: str, i: int) -> bytes:
+    t = re.sub(r"\s+", "", text)
+    if t.startswith("data:") and "," in t:
+        t = t.split(",", 1)[1]          # a data: URL
+    try:
+        return base64.b64decode(t + "=" * (-len(t) % 4), altchars=b"-_" if ("-" in t or "_" in t) else None,
+                                validate=True)
+    except ValueError:
+        raise ToolError(f"Attachment {i}: base64 isn't valid.") from None
+
+
 def _check_ids(ids: list[str]) -> list[str]:
     if not ids:
         raise ToolError("Give at least one message id.")
@@ -460,6 +650,10 @@ def _mail_summary(title: str, a: dict[str, Any]) -> Summary:
     if a["bcc"]:
         fields.append(("Bcc", ", ".join(a["bcc"])))
     fields.append(("Subject", a["subject"] or "(no subject)"))
+    if a.get("files"):
+        fields.append((f"Attachments ({len(a['files'])})", "; ".join(
+            f"{f['name']} · {mailfiles.size_text(f['size'])} · {f['type']} · sha {f['sha256'][:8]}"
+            + (" · from an email" if "message_id" in f else "") for f in a["files"])))
     return Summary(title, fields, preview=a["body"] or None)
 
 
@@ -513,7 +707,8 @@ def _body(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
         mime = part.get("mimeType", "")
         body = part.get("body", {})
         if part.get("filename"):
-            attachments.append({"name": part["filename"], "type": mime, "size": body.get("size", 0)})
+            attachments.append({"name": part["filename"], "type": mime, "size": body.get("size", 0),
+                                "part": part.get("partId", "")})
         elif mime == "text/plain" and body.get("data"):
             plain.append(_decode(body["data"]))
         elif mime == "text/html" and body.get("data"):
