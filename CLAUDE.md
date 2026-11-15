@@ -43,7 +43,8 @@ this package; run them there before releasing a change here.
 
 ## Conventions
 
-- Python ≥ 3.10, standard library first; keep dependencies minimal (`cryptography`, `httpx`).
+- Python ≥ 3.10, standard library first; keep dependencies minimal (`cryptography`, `httpx`, `pypdf`;
+  pypdf parses untrusted PDFs only in a separate `python -I` process with a time limit, `mcp/mailfiles.py`).
 - Tests for every security property you add (negative tests matter most).
 - Releases are tagged `vX.Y.Z[.devN]`; the server pins a tag. A `v*` tag publishes to PyPI as `aisecuritywarden`
   (`.github/workflows/release.yml`, trusted publishing); the tag must equal `__version__`. PyPI files can't be

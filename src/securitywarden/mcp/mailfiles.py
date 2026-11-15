@@ -164,8 +164,7 @@ def _pdf_text(data: bytes) -> tuple[str | None, str]:
     try:
         import pypdf
     except ImportError:
-        return None, ("reading PDFs needs the pdf extra on the agent machine: "
-                      "pip install \"aisecuritywarden[pdf]\" (or ask the user to)")
+        return None, "reading PDFs needs pypdf, which is missing; ask the user to reinstall aisecuritywarden"
     try:
         p = subprocess.run([sys.executable, "-I", "-c", _PDF_SCRIPT, str(PDF_MAX_PAGES),
                             os.path.dirname(os.path.dirname(os.path.abspath(pypdf.__file__)))], input=data,

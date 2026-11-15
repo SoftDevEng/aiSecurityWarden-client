@@ -439,7 +439,7 @@ def test_reading_a_word_document(hub, google, sw):
 
 
 def test_reading_a_pdf(hub, google, sw):
-    pypdf = pytest.importorskip("pypdf")
+    import pypdf
     import io
     sw.rules["gmail.read.attachment"] = "allow"
     w = pypdf.PdfWriter()

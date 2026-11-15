@@ -123,8 +123,7 @@ secret; the token itself never goes in the MCP settings.
 
 - **Reading**: `gmail_read` lists each attachment with its `part`; `gmail_attachment` (`gmail.read.attachment`,
   low risk, allowed by the suggested `gmail.read.*` rule) returns its text: plain text, CSV, Markdown, HTML, Word
-  `.docx`, and PDF when the agent machine has the pdf extra (`pip install "aisecuritywarden[pdf]"`, or
-  `pipx inject aisecuritywarden pypdf`). Long text comes in pieces (`offset`). PDFs are read in a separate process
+  `.docx` and PDF. Long text comes in pieces (`offset`). PDFs are read in a separate process
   with a 20-second limit, so a hostile PDF can't hang `sw-mcp`. Images and other files have no text; they can still
   be forwarded or attached.
 - **Sending**: `gmail_send`, `gmail_reply`, `gmail_forward` and `gmail_draft` take `attachments`, at most 10 and

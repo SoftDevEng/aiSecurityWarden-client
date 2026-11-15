@@ -23,11 +23,11 @@ classifiers = [
 dependencies = [
   "cryptography>=42",
   "httpx>=0.27",
+  "pypdf>=4",            # gmail_attachment reads PDF text (pure Python, run in a separate process with a time limit)
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-pdf = ["pypdf>=4"]          # gmail_attachment reads PDF text (in a separate process with a time limit)
 
 [project.scripts]
 swctl = "securitywarden.client.cli:main"

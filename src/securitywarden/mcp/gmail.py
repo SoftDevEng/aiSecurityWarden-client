@@ -6,7 +6,7 @@ Secrets (in the token's aiSecurityWarden project): GMAIL_CLIENT_ID, GMAIL_CLIENT
 Actions and their risk (the token's rules in aiSecurityWarden decide what asks a person):
 
     gmail.read.search / .message / .thread / .labels   low     reading
-    gmail.read.attachment                                low     an attachment's text (PDF needs the pdf extra)
+    gmail.read.attachment                                low     an attachment's text (text, PDF, .docx)
     gmail.label, gmail.archive, gmail.mark_read         low     organizing (a time window may cover these)
     gmail.draft                                          medium  a draft the user sends themselves
     gmail.send, gmail.reply, gmail.forward, gmail.trash  high    always one approval each
