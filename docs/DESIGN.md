@@ -390,7 +390,8 @@ enabled connectors plus `check_approval`. A connector is one class per applicati
 
 - `name` (the action prefix), `secrets` (names it reads from the token's project), `suggested_rules`;
 - tools declared with `@tool(description, action=..., risk=..., params=..., required=...)`. A tool doesn't do
-  anything: it **prepares** a `Plan(args, summary, run)`. `args` (JSON values, no floats) decides everything
+  anything: it **prepares** a `Plan(args, summary, run[, risk])`. `risk` may raise the tool's declared risk for
+  that call, never lower it. `args` (JSON values, no floats) decides everything
   `run` does; `run(args)` gets nothing else. Preparing may look things up (e.g. the sender of the email being
   replied to) so that `args` and the summary are complete; nothing it reads goes back to the AI.
 

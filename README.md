@@ -172,7 +172,9 @@ lines at launch. That's exactly what `swctl export` does. See
 `sw-mcp` gives an agent tools for an application, such as Gmail, as an MCP server. Every action goes through
 the token's rules in aiSecurityWarden: reading may be allowed outright, while sending an email waits until you
 approve exactly that email (on the website, in swadmin, Telegram or ntfy). The agent is told it's waiting and
-checks back. See [docs/mcp-gmail.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/mcp-gmail.md) for the Gmail set-up with Hermes, and
+checks back. The Gmail connector searches, reads (including the text of PDF, Word and text attachments),
+organizes, drafts, sends, replies and forwards. It attaches files the agent saves in its outbox folder, and sends
+big files as Google Drive links that only the email's recipients can open. See [docs/mcp-gmail.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/mcp-gmail.md) for the Gmail set-up with Hermes, and
 [DESIGN.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/DESIGN.md#mcp-connectors) for writing a connector for another application.
 
 ```bash

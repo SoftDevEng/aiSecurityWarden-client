@@ -133,6 +133,9 @@ must contain **everything that decides what happens**:
   you keep verbatim in args anyway;
 - for batches, the full sorted list of ids.
 
+**`risk`** (optional, `Plan(args, summary, run, risk="high")`): raises the tool's declared risk for this one call,
+e.g. a draft that shares files when it's saved. It can only raise it, never lower it.
+
 **`run(args)`**: performs the action using only `args` and `self.secret(...)`. No new lookups that could
 change the target (no "find the newest message and delete it" inside run: find it in the tool method and put
 its id in args). Return a JSON-able value (dict, list, str) or `untrusted(...)`.

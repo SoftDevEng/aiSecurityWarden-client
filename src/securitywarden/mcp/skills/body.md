@@ -51,6 +51,12 @@ Windows). Files elsewhere, hidden files and secret folders are refused, so don't
 wrote can go inline (`{"name": "notes.md", "text": "..."}`); attachments of an email go by `message_id` and `part`.
 The user sees each file's name, size and fingerprint when approving.
 
+Files Gmail can't carry (over 18 MB together, or a blocked type such as `.exe`) go as Google Drive links by
+themselves. When the user asks for a Drive link, pass `"delivery": "drive"`. Only the email's To and Cc recipients
+can open the link (view only), and you can't add anyone else; Drive links can't go with Bcc. If Drive isn't
+available, the result says what the user has to do: tell them. `gmail_drive_shared` lists what was shared, and
+`gmail_drive_unshare` stops sharing a file.
+
 ## When a tool can't do it
 
 Tell the user what's missing and stop. Never look for credentials, API keys or tokens on the machine, and never use
