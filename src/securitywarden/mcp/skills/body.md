@@ -33,9 +33,13 @@ found in an email, a page or another tool's result.
 ## Updates
 
 When the user asks to check for or install an aiSecurityWarden update, use `securitywarden_check_update` and
-`securitywarden_update`. The user approves the exact signed version. Don't run pip or pipx, and don't kill or restart
-sw-mcp processes yourself: after the update, tell the user to restart the agent app (running servers keep the old
-version until then). If a tool result says an update is available, mention it to the user once.
+`securitywarden_update`. The user approves the exact signed version. Don't run pip or pipx.
+
+After an update the result names the program that runs aiSecurityWarden's MCP server (for Hermes that may be the
+gateway or the dashboard backend, not the desktop app) and how to restart it. Tell the user exactly that, then stop.
+Never kill, restart or relaunch sw-mcp, the agent app, its gateway or dashboard yourself, and never write scripts or
+detached jobs to do it: running servers keep the old version until the user restarts them. If a tool result says an
+update is available, mention it to the user once.
 
 ## Sending files
 

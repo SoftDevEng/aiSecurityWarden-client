@@ -724,9 +724,11 @@ class Hub:
         text = info.text()
         if self._update_installed and info.latest == self._update_installed and not info.restart_needed:
             # Windows: it installs once this program stops; the files on disk are still the old version
-            text = (f"aiSecurityWarden {self._update_installed} was downloaded and installs when this program stops: "
-                    "restart the agent app (or its MCP servers) to use it.")
+            text = f"aiSecurityWarden {self._update_installed} was downloaded and installs when this program stops."
             data = {**data, "update_available": False, "restart_needed": True}
+        if data.get("restart_needed"):
+            text = text.replace("; restart the agent app (or its MCP servers) to use it", "") + " " + self._restart()
+            data = {**data, "restart": self._host_info()}
         if info.available and not info.problem:
             text += " To install it, call securitywarden_update (the user approves it in aiSecurityWarden)."
         return Result(text, False, data)
@@ -742,7 +744,7 @@ class Hub:
             return Result(f"Couldn't check for aiSecurityWarden updates: {_short(e)}.", True)
         if self._update_installed and info.latest == self._update_installed:
             return Result(f"aiSecurityWarden {self._update_installed} is already installed (or installs when this "
-                          "program stops). Restart the agent app (or its MCP servers) to use it. Nothing to do.")
+                          "program stops). Nothing to install. " + self._restart())
         if not info.available:
             return Result(info.text() + " Nothing to install.", info.problem is not None)
         if info.problem:
@@ -763,7 +765,14 @@ class Hub:
             msg = updater.install(wheel, a["version"])
             self._update_note, self._update_noted = None, True
             self._update_installed = a["version"]
-            return msg
+            if "installs as soon as this program stops" in msg:          # Windows: a helper installs it later
+                log = msg.rsplit("The install log is ", 1)[-1]
+                msg = (f"aiSecurityWarden {a['version']} is downloaded and checked; it installs as soon as this "
+                       f"program stops (install log: {log}).")
+            else:
+                msg = (f"aiSecurityWarden {a['version']} is installed; this program keeps running the old version "
+                       "until it is restarted.")
+            return f"{msg} {self._restart()}"
 
         plan = Plan(args, summary, run)
         try:
@@ -771,6 +780,16 @@ class Hub:
         except CryptoError as e:
             return Result(f"Couldn't prepare the update ({e}).", True)
         return self._gate(self.UPDATE_TOOL, self.UPDATE_ACTION, "high", plan, digest)
+
+    def _host_info(self) -> dict[str, Any] | None:
+        if not hasattr(self, "_host"):
+            from .host import agent_host
+            self._host = agent_host()
+        return self._host
+
+    def _restart(self) -> str:
+        from .host import restart_advice
+        return restart_advice(self._host_info(), lookup=False)
 
     def _noted(self, info: Any) -> None:
         self._update_checked_at = self.clock()
