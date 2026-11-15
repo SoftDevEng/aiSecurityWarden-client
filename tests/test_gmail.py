@@ -25,6 +25,11 @@ class FakeGoogle:
         self.revoked = False
         self.sent, self.drafts, self.modified, self.trashed = [], [], [], []
         self.uploads = []
+        self.scope = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/drive.file"
+        self.drive_files, self.drive_perms, self.drive_calls = {}, {}, []
+        self.no_google_account = set()
+        self.drive_api_off = False
+        self.fail_send = False
         self.pdf = b"%PDF-1.4 fake invoice"
         self.att_fetches = 0
         self.labels = [{"id": "INBOX", "name": "INBOX"}, {"id": "Label_7", "name": "Receipts"}]
@@ -66,8 +71,11 @@ class FakeGoogle:
             if self.revoked:
                 return httpx.Response(400, json={"error": "invalid_grant"})
             self.refreshes += 1
-            return httpx.Response(200, json={"access_token": f"at{self.refreshes}", "expires_in": 3599})
+            return httpx.Response(200, json={"access_token": f"at{self.refreshes}", "expires_in": 3599,
+                                             "scope": self.scope})
         assert req.headers["Authorization"].startswith("Bearer at")
+        if url.host == "www.googleapis.com":
+            return self.drive(req)
         path = url.path.removeprefix("/gmail/v1/users/me")
         q = parse_qs(url.query.decode())
         body = json.loads(req.content) if req.content and not url.path.startswith("/upload/") else None
@@ -100,11 +108,75 @@ class FakeGoogle:
             self.trashed.append(path.split("/")[2])
             return httpx.Response(200, json={})
         if path == "/messages/send":
+            if self.fail_send:
+                return httpx.Response(500)
             self.sent.append(body)
             return httpx.Response(200, json={"id": "s1", "threadId": body.get("threadId", "t9")})
         if path == "/drafts":
             self.drafts.append(body)
             return httpx.Response(200, json={"id": "d1"})
+        return httpx.Response(500)
+
+
+    def drive(self, req):
+        url, q = req.url, parse_qs(req.url.query.decode())
+        self.drive_calls.append((req.method, url.path))
+        if self.drive_api_off:
+            return httpx.Response(403, json={"error": {"code": 403, "message": "Drive API has not been used",
+                                                       "errors": [{"reason": "accessNotConfigured"}]}})
+        p = url.path
+        if p == "/drive/v3/files" and req.method == "GET":
+            if "mimeType = 'application/vnd.google-apps.folder'" in q["q"][0]:
+                return httpx.Response(200, json={"files": [{"id": f} for f, m in self.drive_files.items()
+                                                           if m.get("folder")]})
+            parent = q["q"][0].split("'")[1]
+            files = [{"id": f, "name": m["name"], "size": str(len(m["data"])), "webViewLink": m["link"],
+                      "permissions": [{"id": "own", "role": "owner", "emailAddress": "me@example.com", "type": "user"}]
+                      + [dict(v, id=k) for k, v in self.drive_perms.get(f, {}).items()]}
+                     for f, m in self.drive_files.items() if parent in m.get("parents", []) and not m.get("trashed")]
+            return httpx.Response(200, json={"files": files})
+        if p == "/drive/v3/files" and req.method == "POST":
+            fid = f"FOLDER{len(self.drive_files):06d}"
+            self.drive_files[fid] = {"folder": True, "name": json.loads(req.content)["name"]}
+            return httpx.Response(200, json={"id": fid})
+        if p == "/upload/drive/v3/files" and req.method == "POST":
+            assert q["uploadType"] == ["resumable"]
+            meta = json.loads(req.content)
+            return httpx.Response(200, headers={"Location": "https://www.googleapis.com/upload/drive/v3/files?"
+                                                            f"upload_id=U{len(self.drive_files)}"},
+                                  json={}) if meta else httpx.Response(400)
+        if p == "/upload/drive/v3/files" and req.method == "PUT":
+            fid = f"FILE{len(self.drive_files):08d}"
+            self.drive_files[fid] = {"name": "?", "data": req.content, "parents": [next(
+                f for f, m in self.drive_files.items() if m.get("folder"))],
+                "link": f"https://drive.google.com/file/d/{fid}/view"}
+            return httpx.Response(200, json={"id": fid})
+        parts = p.split("/")          # /drive/v3/files/<id>[/permissions[/<pid>]]
+        fid = parts[4] if len(parts) > 4 else ""
+        if fid not in self.drive_files:
+            return httpx.Response(404, json={"error": {"message": "File not found"}})
+        f = self.drive_files[fid]
+        if len(parts) == 5 and req.method == "GET":
+            return httpx.Response(200, json={"id": fid, "name": f["name"], "webViewLink": f.get("link"),
+                                             "permissions": [{"id": "own", "role": "owner"}] + [
+                                                 dict(v, id=k) for k, v in self.drive_perms.get(fid, {}).items()]})
+        if len(parts) == 5 and req.method == "PATCH":
+            f["trashed"] = json.loads(req.content)["trashed"]
+            return httpx.Response(200, json={})
+        if len(parts) == 6 and req.method == "POST":
+            body = json.loads(req.content)
+            assert body["type"] == "user" and body["role"] == "reader", body      # never anyone / domain / writer
+            if body["emailAddress"] in self.no_google_account and q["sendNotificationEmail"] == ["false"]:
+                return httpx.Response(400, json={"error": {"message": "x", "errors": [
+                    {"reason": "invalidSharingRequest"}]}})
+            perms = self.drive_perms.setdefault(fid, {})
+            pid = f"p{len(perms)}"
+            perms[pid] = {"emailAddress": body["emailAddress"], "role": "reader", "type": "user",
+                          "notified": q["sendNotificationEmail"] == ["true"]}
+            return httpx.Response(200, json={"id": pid})
+        if len(parts) == 7 and req.method == "DELETE":
+            self.drive_perms.get(fid, {}).pop(parts[6], None)
+            return httpx.Response(204)
         return httpx.Response(500)
 
 
@@ -280,7 +352,7 @@ def test_login_uses_pkce_and_state_and_shows_the_token_once(monkeypatch, capsys)
         monkeypatch.delenv(k, raising=False)
     gmail.Gmail.login(argparse.Namespace(project=None, no_browser=False, token_file=None))
     assert seen["code_challenge_method"] == "S256" and seen["access_type"] == "offline"
-    assert seen["scope"] == "https://www.googleapis.com/auth/gmail.modify"
+    assert seen["scope"] == "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/drive.file"
     out = capsys.readouterr()
     assert out.out.strip() == "the-refresh-token" and "me@example.com" in out.err
     assert "the-refresh-token" not in out.err
@@ -371,8 +443,9 @@ def test_files_gmail_would_refuse_never_get_as_far_as_approval(hub, google, sw):
         [{"name": "a.txt", "text": "1"}, {"name": "A.TXT", "text": "2"}],
         [{"name": f"{i}.txt", "text": "x"} for i in range(11)],
     ]
-    for files in bad:
-        r = hub.call("gmail_send", {"to": ["bob@example.com"], "subject": "s", "body": "b", "attachments": files})
+    for files in bad:                       # attach only: blocked kinds may still go as Drive links (tested below)
+        r = hub.call("gmail_send", {"to": ["bob@example.com"], "subject": "s", "body": "b", "attachments": files,
+                                    "delivery": "attach"})
         assert r.is_error, files
     assert sw.requests == {} and google.sent == []
 
@@ -548,3 +621,136 @@ def test_the_agent_is_told_where_to_save_files(box):
     desc = gmail._FILES["description"]
     assert "outbox folder" in desc and '"path"' in desc
     assert "outbox folder" in INSTRUCTIONS
+
+
+# -- Google Drive links --------------------------------------------------------------------
+
+def _drive_files(google):
+    return {k: v for k, v in google.drive_files.items() if not v.get("folder")}
+
+
+def test_big_files_go_as_drive_links_shared_only_with_to_and_cc(hub, google, sw, box):
+    (box / "big.zip").write_bytes(b"PK\x05\x06" + bytes(18) + b"x" * 19_000_000)
+    (box / "small.txt").write_text("hi")
+    r = hub.call("gmail_send", {"to": ["Bob <Bob@Example.com>"], "cc": ["carol@example.com"], "subject": "Files",
+                                "body": "Here you go.", "attachments": [{"path": "big.zip"}, {"path": "small.txt"}]})
+    fields = dict(map(tuple, sw.requests[r.data["request_id"]]["summary"]["fields"]))
+    assert "big.zip" in fields["Drive links (1)"] and "small.txt" in fields["Attachments (1)"]
+    assert fields["Drive: view only for"] == "bob@example.com, carol@example.com"
+    assert google.drive_calls == []                                  # nothing uploaded or shared before approval
+    out = json.loads(_approve(hub, sw, r).text)
+    (fid, f), = _drive_files(google).items()
+    assert f["data"].endswith(b"x" * 100)
+    assert sorted(p["emailAddress"] for p in google.drive_perms[fid].values()) == ["bob@example.com",
+                                                                                  "carol@example.com"]
+    assert not any(p["notified"] for p in google.drive_perms[fid].values())
+    msg = _sent(google.sent[0]["raw"])
+    assert [p.get_filename() for p in msg.iter_attachments()] == ["small.txt"]
+    text = msg.get_body(("plain",)).get_content()
+    assert "Here you go." in text and f"https://drive.google.com/file/d/{fid}/view" in text and "shared with you only" in text
+    assert out["drive_links"][0]["file_id"] == fid and out["shared_with"] == ["bob@example.com", "carol@example.com"]
+
+
+def test_asking_for_a_drive_link_and_what_cant_go_by_drive(hub, google, sw, box):
+    (box / "notes.md").write_text("# notes")
+    r = hub.call("gmail_send", {"to": ["bob@example.com"], "subject": "s", "body": "b",
+                                "attachments": [{"path": "notes.md"}], "delivery": "drive"})
+    assert "Drive links (1)" in dict(map(tuple, sw.requests[r.data["request_id"]]["summary"]["fields"]))
+    bad = [
+        {"bcc": ["x@example.com"], "delivery": "drive"},                               # Bcc would show in Drive
+        {"delivery": "everywhere"},
+    ]
+    for extra in bad:
+        args = {"to": ["bob@example.com"], "subject": "s", "body": "b", "attachments": [{"path": "notes.md"}]}
+        assert hub.call("gmail_send", {**args, **extra}).is_error, extra
+    # the AI can't name who gets access
+    assert hub.call("gmail_send", {"to": ["bob@example.com"], "subject": "s", "body": "b", "delivery": "drive",
+                                   "attachments": [{"path": "notes.md"}], "share": ["evil@example.net"]}).is_error
+    assert hub.call("gmail_send", {"to": ["bob@example.com"], "subject": "s", "body": "b", "delivery": "drive",
+                                   "attachments": [{"path": "notes.md", "share": "evil@example.net"}]}).is_error
+    assert google.drive_calls == []
+
+
+def test_blocked_types_need_drive(hub, sw, box):
+    (box / "setup.exe").write_bytes(b"MZ")
+    args = {"to": ["bob@example.com"], "subject": "s", "body": "b", "attachments": [{"path": "setup.exe"}]}
+    r = hub.call("gmail_send", {**args, "delivery": "attach"})
+    assert r.is_error and "delivery drive" in r.text
+    r = hub.call("gmail_send", args)
+    assert "Drive links (1)" in dict(map(tuple, sw.requests[r.data["request_id"]]["summary"]["fields"]))
+
+
+def test_without_drive_access_no_drive_call_is_made(hub, google, sw, box):
+    google.scope = "https://www.googleapis.com/auth/gmail.modify"
+    (box / "notes.md").write_text("x")
+    r = hub.call("gmail_send", {"to": ["bob@example.com"], "subject": "s", "body": "b",
+                                "attachments": [{"path": "notes.md"}], "delivery": "drive"})
+    assert r.is_error and "Reconnect" in r.text and google.drive_calls == []
+    r = hub.call("gmail_send", {"to": ["bob@example.com"], "subject": "s", "body": "b",
+                                "attachments": [{"path": "notes.md"}]})
+    assert r.data["status"] == "waiting_for_approval"                  # plain attachments still work
+
+
+def test_a_draft_with_drive_links_is_high_risk(hub, sw, box):
+    (box / "notes.md").write_text("x")
+    args = {"to": ["bob@example.com"], "subject": "s", "body": "b", "attachments": [{"path": "notes.md"}]}
+    assert sw.requests[hub.call("gmail_draft", args).data["request_id"]]["risk"] == "medium"
+    assert sw.requests[hub.call("gmail_draft", {**args, "delivery": "drive"}).data["request_id"]]["risk"] == "high"
+
+
+def test_a_failed_send_unshares_and_trashes_the_upload(hub, google, sw, box):
+    (box / "notes.md").write_text("x")
+    google.fail_send = True
+    r = hub.call("gmail_send", {"to": ["bob@example.com"], "subject": "s", "body": "b",
+                                "attachments": [{"path": "notes.md"}], "delivery": "drive"})
+    out = _approve(hub, sw, r)
+    assert out.is_error and google.sent == []
+    (fid, f), = _drive_files(google).items()
+    assert f["trashed"] is True and google.drive_perms[fid] == {}
+
+
+def test_a_changed_file_is_refused_before_anything_is_shared(hub, google, sw, box):
+    (box / "notes.md").write_text("x")
+    r = hub.call("gmail_send", {"to": ["bob@example.com"], "subject": "s", "body": "b",
+                                "attachments": [{"path": "notes.md"}], "delivery": "drive"})
+    (box / "notes.md").write_text("changed")
+    assert "changed after it was approved" in _approve(hub, sw, r).text
+    assert _drive_files(google) == {} and google.sent == []
+
+
+def test_recipients_without_a_google_account_get_googles_invitation(hub, google, sw, box):
+    (box / "notes.md").write_text("x")
+    google.no_google_account = {"dave@example.org"}
+    r = hub.call("gmail_send", {"to": ["dave@example.org"], "subject": "s", "body": "b",
+                                "attachments": [{"path": "notes.md"}], "delivery": "drive"})
+    out = json.loads(_approve(hub, sw, r).text)
+    assert "dave@example.org" in out["note"]
+    (fid, _), = _drive_files(google).items()
+    assert [p["notified"] for p in google.drive_perms[fid].values()] == [True]
+
+
+def test_drive_api_turned_off_says_how_to_fix(hub, google, sw, box):
+    (box / "notes.md").write_text("x")
+    google.drive_api_off = True
+    r = hub.call("gmail_send", {"to": ["bob@example.com"], "subject": "s", "body": "b",
+                                "attachments": [{"path": "notes.md"}], "delivery": "drive"})
+    out = _approve(hub, sw, r)
+    assert out.is_error and "Google Drive API" in out.text and google.sent == []
+
+
+def test_listing_and_unsharing(hub, google, sw, box):
+    (box / "notes.md").write_text("x")
+    r = hub.call("gmail_send", {"to": ["bob@example.com"], "cc": ["carol@example.com"], "subject": "s", "body": "b",
+                                "attachments": [{"path": "notes.md"}], "delivery": "drive"})
+    _approve(hub, sw, r)
+    sw.rules["gmail.read.drive_shared"] = "allow"
+    listed = _inner(hub.call("gmail_drive_shared", {}))["files"]
+    assert listed[0]["name"] and listed[0]["shared_with"] == ["bob@example.com", "carol@example.com"]
+    fid = listed[0]["file_id"]
+    assert hub.call("gmail_drive_unshare", {"file_id": "../x"}).is_error
+    u = hub.call("gmail_drive_unshare", {"file_id": fid, "trash": True})
+    fields = dict(map(tuple, sw.requests[u.data["request_id"]]["summary"]["fields"]))
+    assert fields["Shared with"] == "bob@example.com, carol@example.com"
+    out = json.loads(_approve(hub, sw, u).text)
+    assert out == {"unshared": True, "people_removed": 2, "trashed": True}
+    assert google.drive_perms[fid] == {} and google.drive_files[fid]["trashed"] is True

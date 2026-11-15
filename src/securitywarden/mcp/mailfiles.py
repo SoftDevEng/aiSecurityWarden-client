@@ -20,6 +20,7 @@ MAX_FILES = 10                      # attachments per email
 MAX_INLINE = 1_000_000              # bytes per file the AI passes as text or base64
 MAX_TOTAL = 18_000_000              # all files of one email: Gmail's 25 MB limit after base64 encoding
 MAX_READ_FILE = 15_000_000          # an attachment the AI asks to read
+MAX_DRIVE = 100_000_000             # one file sent as a Google Drive link
 MAX_NAME = 255                      # bytes, UTF-8
 PDF_TIMEOUT = 20                    # seconds to get the text out of one PDF
 PDF_MAX_PAGES = 300
