@@ -10,6 +10,13 @@ Actions and their risk (the token's rules in aiSecurityWarden decide what asks a
     gmail.label, gmail.archive, gmail.mark_read         low     organizing (a time window may cover these)
     gmail.draft                                          medium  a draft the user sends themselves
     gmail.send, gmail.reply, gmail.forward, gmail.trash  high    always one approval each
+    gmail.read.drive_shared                              low     files this connector shared on Google Drive
+    gmail.drive_unshare                                  low     stop sharing one of them (only ever reduces access)
+
+Files too big for Gmail (or sent with delivery "drive") go to the user's Google Drive, in a folder "aiSecurityWarden
+shared", shared view-only with the email's To and Cc recipients only (never "anyone with the link"; the connector,
+not the AI, decides who). The email carries the links. Needs the drive.file scope (the connector sees only files it
+uploaded); a draft with Drive links is high risk because the files are shared when the draft is saved.
 
 Send, reply, forward and draft take ``attachments``: text or a small base64 file the AI made, an attachment of
 an email in the mailbox (``message_id`` + ``part`` from gmail_read), or a file the AI saved in the aiSecurityWarden
@@ -36,6 +43,7 @@ import time
 import urllib.parse
 import uuid
 import webbrowser
+from collections.abc import Callable
 from email.message import EmailMessage
 from html.parser import HTMLParser
 from typing import Any
@@ -51,7 +59,16 @@ UPLOAD = "https://gmail.googleapis.com/upload/gmail/v1/users/me"
 UPLOAD_OVER = 4_000_000              # bytes of email: bigger ones go through Gmail's upload endpoint
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
-SCOPES = ("https://www.googleapis.com/auth/gmail.modify",)   # read, organize, draft, send, trash (no permanent delete)
+GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify"   # read, organize, draft, send, trash (no permanent delete)
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"     # only files this app uploaded
+SCOPES = (GMAIL_SCOPE, DRIVE_SCOPE)
+DRIVE = "https://www.googleapis.com/drive/v3"
+DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3"
+DRIVE_FOLDER = "aiSecurityWarden shared"
+DRIVE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,128}$")
+NO_DRIVE = ("Drive links need Google Drive access, which this Gmail sign-in doesn't have. Ask the user to reconnect "
+            "Gmail on the aiSecurityWarden website (Connectors, Gmail, Reconnect) and tick Google Drive, or run "
+            "sw-mcp login gmail on a computer with a browser.")
 
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 PART_RE = re.compile(r"^[0-9]{1,4}(\.[0-9]{1,4}){0,7}$")
@@ -68,13 +85,18 @@ _ADDRS = {"type": "array", "items": {"type": "string"}, "description": "Email ad
 _MID = {"type": "string", "description": "A Gmail message id (from gmail_search)."}
 _SUBJECT = {"type": "string", "description": "Subject line (one line)."}
 _BODY = {"type": "string", "description": "Plain-text body."}
+_DELIVERY = {"type": "string", "enum": ["auto", "attach", "drive"], "description": (
+    "How files travel: auto (default) attaches them and uses Google Drive links only for what Gmail can't carry; "
+    "attach never uses Drive; drive sends every file as a Drive link, view-only for the To and Cc recipients "
+    "(use it when the user asks for a Drive link). Drive links can't be combined with Bcc.")}
 _PART = {"type": "string", "description": "The attachment's part, as gmail_read lists it (e.g. \"1\")."}
 _FILES = {"type": "array", "maxItems": mailfiles.MAX_FILES, "description": (
     "Files to attach (at most 10, 18 MB together). Each is one of: {\"path\": \"report.pdf\"} for a file you saved in "
     f"the aiSecurityWarden outbox folder {mailfiles.outbox()} (save files you make or download there first; a bare "
     "name means a file in that folder); {\"name\": \"summary.md\", \"text\": \"...\"} for short text you wrote; "
     "{\"message_id\": \"...\", \"part\": \"1\"} (optional \"name\") for an attachment of an email, as gmail_read "
-    "lists it; or {\"name\": \"icon.png\", \"base64\": \"...\"} for a tiny file (1 MB)."),
+    "lists it; or {\"name\": \"icon.png\", \"base64\": \"...\"} for a tiny file (1 MB). Files too big for Gmail "
+    "(18 MB together) go as Google Drive links shared only with the To and Cc recipients (up to 100 MB each)."),
     "items": {"type": "object", "additionalProperties": False, "properties": {
         "path": {"type": "string"}, "name": {"type": "string"}, "text": {"type": "string"},
         "base64": {"type": "string"}, "message_id": {"type": "string"}, "part": {"type": "string"}}}}
@@ -87,7 +109,7 @@ class Gmail(Connector):
     secrets = ("GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET", "GMAIL_REFRESH_TOKEN")
     suggested_rules = ("gmail.read.*=allow", "gmail.label=window:30m", "gmail.mark_read=window:30m",
                        "gmail.archive=window:30m", "gmail.draft=each", "gmail.send=each", "gmail.reply=each",
-                       "gmail.forward=each", "gmail.trash=each")
+                       "gmail.forward=each", "gmail.trash=each", "gmail.drive_unshare=allow")
     transport: httpx.BaseTransport | None = None      # tests replace Google with a fake
 
     def __init__(self, ctx: Any) -> None:
@@ -97,6 +119,8 @@ class Gmail(Connector):
         self._access_exp = 0.0
         self._labels: dict[str, str] | None = None     # name -> id
         self._me: str | None = None
+        self._scopes: set[str] | None = None            # what the Google sign-in allows
+        self._folder: str | None = None
 
     def close(self) -> None:
         self.http.close()
@@ -177,6 +201,57 @@ class Gmail(Connector):
             out["next_offset"] = start + len(piece)
         return untrusted(out, "Gmail attachment")
 
+    @tool("List the files aiSecurityWarden shared as Google Drive links, newest first, with who can open each.",
+          action="gmail.read.drive_shared", risk="low", params={})
+    def drive_shared(self) -> Plan:
+        return Plan({}, Summary("List files shared on Google Drive"), self._drive_shared)
+
+    def _drive_shared(self, a: dict[str, Any]) -> Any:
+        if not self._has_drive():
+            raise ToolError(NO_DRIVE)
+        q = f"'{self._drive_folder()}' in parents and trashed = false"
+        r = self._drive_ok(self._drive("GET", DRIVE + "/files", params={
+            "q": q, "orderBy": "createdTime desc", "pageSize": 100,
+            "fields": "files(id,name,size,createdTime,webViewLink,permissions(id,type,role,emailAddress))"}))
+        out = []
+        for f in r.get("files") or []:
+            people = sorted(p.get("emailAddress", "") for p in f.get("permissions") or []
+                            if p.get("role") != "owner")
+            out.append({"file_id": f.get("id"), "name": f.get("name"), "size": int(f.get("size", 0) or 0),
+                        "created": f.get("createdTime"), "link": f.get("webViewLink"), "shared_with": people})
+        return untrusted({"files": out}, "Google Drive")
+
+    @tool("Stop sharing a file aiSecurityWarden shared on Google Drive (everyone loses access); optionally move it "
+          "to the Drive trash. Only ever reduces access.", action="gmail.drive_unshare", risk="low",
+          params={"file_id": {"type": "string", "description": "From gmail_drive_shared or a send result."},
+                  "trash": {"type": "boolean", "description": "Also move the file to the Drive trash. Default false."}},
+          required=["file_id"])
+    def drive_unshare(self, file_id: str, trash: bool = False) -> Plan:
+        if not DRIVE_ID_RE.match(file_id or ""):
+            raise ToolError(f"{file_id!r} isn't a Google Drive file id.")
+        if not self._has_drive():
+            raise ToolError(NO_DRIVE)
+        f = self._drive_ok(self._drive("GET", f"{DRIVE}/files/{file_id}", params={
+            "fields": "id,name,permissions(id,role,emailAddress)"}))
+        people = [p.get("emailAddress", "") for p in f.get("permissions") or [] if p.get("role") != "owner"]
+        fields = [("File", f.get("name", file_id)), ("Shared with", ", ".join(people) or "nobody")]
+        if trash:
+            fields.append(("Also", "move it to the Drive trash"))
+        return Plan({"file_id": file_id, "trash": bool(trash)},
+                    Summary("Stop sharing a Drive file", fields), self._unshare)
+
+    def _unshare(self, a: dict[str, Any]) -> Any:
+        f = self._drive_ok(self._drive("GET", f"{DRIVE}/files/{a['file_id']}",
+                                       params={"fields": "id,permissions(id,role)"}))
+        removed = 0
+        for p in f.get("permissions") or []:
+            if p.get("role") != "owner":
+                self._drive_ok(self._drive("DELETE", f"{DRIVE}/files/{a['file_id']}/permissions/{p['id']}"))
+                removed += 1
+        if a["trash"]:
+            self._drive_ok(self._drive("PATCH", f"{DRIVE}/files/{a['file_id']}", json={"trashed": True}))
+        return {"unshared": True, "people_removed": removed, "trashed": a["trash"]}
+
     # -- organizing ------------------------------------------------------------------------
 
     @tool("Add and/or remove labels on emails (label names as shown by gmail_labels).", action="gmail.label",
@@ -227,30 +302,33 @@ class Gmail(Connector):
 
     @tool("Send a new email.", action="gmail.send", risk="high",
           params={"to": _ADDRS, "subject": _SUBJECT, "body": _BODY, "cc": _ADDRS, "bcc": _ADDRS,
-                  "attachments": _FILES},
+                  "attachments": _FILES, "delivery": _DELIVERY},
           required=["to", "subject", "body"])
     def send(self, to: list[str], subject: str, body: str, cc: list[str] | None = None,
-             bcc: list[str] | None = None, attachments: list[dict[str, Any]] | None = None) -> Plan:
+             bcc: list[str] | None = None, attachments: list[dict[str, Any]] | None = None,
+             delivery: str = "auto") -> Plan:
         a = _mail_args(to, cc or [], bcc or [], subject, body)
-        a["files"] = self._files(attachments)
+        self._add_files(a, attachments, delivery)
         return Plan(a, _mail_summary("Send an email", a), self._send)
 
     @tool("Save a draft in Gmail for the user to review and send themselves.", action="gmail.draft", risk="medium",
-          params={"to": _ADDRS, "subject": _SUBJECT, "body": _BODY, "cc": _ADDRS, "attachments": _FILES},
+          params={"to": _ADDRS, "subject": _SUBJECT, "body": _BODY, "cc": _ADDRS, "attachments": _FILES,
+                  "delivery": _DELIVERY},
           required=["to", "subject", "body"])
     def draft(self, to: list[str], subject: str, body: str, cc: list[str] | None = None,
-              attachments: list[dict[str, Any]] | None = None) -> Plan:
+              attachments: list[dict[str, Any]] | None = None, delivery: str = "auto") -> Plan:
         a = _mail_args(to, cc or [], [], subject, body)
-        a["files"] = self._files(attachments)
-        return Plan(a, _mail_summary("Save a draft", a), self._draft)
+        self._add_files(a, attachments, delivery)
+        drive = any(f["delivery"] == "drive" for f in a["files"])     # shared now, whatever happens to the draft
+        return Plan(a, _mail_summary("Save a draft", a), self._draft, risk="high" if drive else None)
 
     @tool("Reply to an email (to its sender, or everyone with reply_all).", action="gmail.reply", risk="high",
           params={"message_id": _MID, "body": _BODY,
                   "reply_all": {"type": "boolean", "description": "Also reply to everyone in To and Cc. Default false."},
-                  "attachments": _FILES},
+                  "attachments": _FILES, "delivery": _DELIVERY},
           required=["message_id", "body"])
     def reply(self, message_id: str, body: str, reply_all: bool = False,
-              attachments: list[dict[str, Any]] | None = None) -> Plan:
+              attachments: list[dict[str, Any]] | None = None, delivery: str = "auto") -> Plan:
         _check_id(message_id)
         m = self._get(f"/messages/{message_id}", params={"format": "metadata", "metadataHeaders": [
             "From", "Reply-To", "To", "Cc", "Subject", "Message-ID", "References"]})
@@ -265,7 +343,7 @@ class Gmail(Connector):
         if not subject.lower().startswith("re:"):
             subject = f"Re: {subject}".strip()
         a = _mail_args(to, cc, [], subject, body)
-        a["files"] = self._files(attachments)
+        self._add_files(a, attachments, delivery)
         refs = " ".join(x for x in (h.get("references", ""), h.get("message-id", "")) if x).strip()
         a.update({"thread_id": m.get("threadId", ""), "in_reply_to": h.get("message-id", ""), "references": refs[-2000:]})
         return Plan(a, _mail_summary("Reply to an email", a), self._send)
@@ -274,15 +352,15 @@ class Gmail(Connector):
           action="gmail.forward", risk="high",
           params={"message_id": _MID, "to": _ADDRS,
                   "note": {"type": "string", "description": "Optional text above the forwarded email."},
-                  "attachments": _FILES},
+                  "attachments": _FILES, "delivery": _DELIVERY},
           required=["message_id", "to"])
     def forward(self, message_id: str, to: list[str], note: str = "",
-                attachments: list[dict[str, Any]] | None = None) -> Plan:
+                attachments: list[dict[str, Any]] | None = None, delivery: str = "auto") -> Plan:
         _check_id(message_id)
         m = self._get(f"/messages/{message_id}", params={"format": "metadata", "metadataHeaders": ["From", "Subject"]})
         h = _headers(m)
         a = _mail_args(to, [], [], f"Fwd: {_one_line(h.get('subject', ''))}".strip(), note)
-        a["files"] = self._files(attachments)
+        self._add_files(a, attachments, delivery)
         a["forward_id"] = message_id
         s = _mail_summary("Forward an email", a)
         fields = list(s.fields) + [("Original from", h.get("from", "")), ("Forwarding", "the original email, in full")]
@@ -295,7 +373,6 @@ class Gmail(Connector):
         if not isinstance(items, list) or len(items) > mailfiles.MAX_FILES:
             raise ToolError(f"At most {mailfiles.MAX_FILES} attachments.")
         out: list[dict[str, Any]] = []
-        total = 0
         for i, it in enumerate(items, 1):
             if not isinstance(it, dict) or set(it) - {"name", "text", "base64", "message_id", "part", "path"}:
                 raise ToolError(f"Attachment {i}: use path, name + text, name + base64, or message_id + part.")
@@ -307,13 +384,13 @@ class Gmail(Connector):
             try:
                 if "path" in it:
                     real = mailfiles.check_path(it["path"])
-                    data = mailfiles.read_path(real, mailfiles.MAX_TOTAL)
+                    data = mailfiles.read_path(real, mailfiles.MAX_DRIVE)
                     name = mailfiles.clean_name(it.get("name") or os.path.basename(real))
                     entry = {"path": real}
                 elif "message_id" in it:
                     _check_id(it["message_id"])
                     _check_part(it["part"])
-                    info, data = self._part(it["message_id"], it["part"], limit=mailfiles.MAX_TOTAL)
+                    info, data = self._part(it["message_id"], it["part"], limit=mailfiles.MAX_DRIVE)
                     name = mailfiles.clean_name(it.get("name") or info["name"])
                     entry: dict[str, Any] = {"message_id": it["message_id"], "part": it["part"]}
                 else:
@@ -326,30 +403,80 @@ class Gmail(Connector):
                         raise ToolError(f"Attachment {i} ({name}) is over 1 MB; files that big can't be passed "
                                         "inline.")
                     entry = {"data": base64.b64encode(data).decode("ascii")}
-                mailfiles.check_sendable(name, data)
+                try:
+                    mailfiles.check_sendable(name, data)
+                    sendable = True
+                except mailfiles.FileProblem as e:
+                    sendable, why = False, str(e)
             except mailfiles.FileProblem as e:
                 raise ToolError(f"Attachment {i}: {e}") from None
-            total += len(data)
-            if total > mailfiles.MAX_TOTAL:
-                raise ToolError("The attachments are over 18 MB together, more than Gmail can send. (Google Drive "
-                                "links for big files are planned.)")
             entry.update({"name": name, "type": mailfiles.mime_type(name), "size": len(data),
                           "sha256": hashlib.sha256(data).hexdigest()})
+            if not sendable:
+                entry["_blocked"] = why
             out.append(entry)
         if len({f["name"].lower() for f in out}) != len(out):
             raise ToolError("Two attachments have the same name; give each its own.")
         return out
+
+    def _add_files(self, a: dict[str, Any], items: list[dict[str, Any]] | None, delivery: str) -> None:
+        """Checked files, each with how it travels ("attach" or "drive"), and the Drive share list. The share list
+        is computed here from To and Cc, never passed by the AI."""
+        if delivery not in ("auto", "attach", "drive"):
+            raise ToolError("delivery is auto, attach or drive.")
+        files = self._files(items)
+        blocked = [f for f in files if "_blocked" in f]
+        if delivery == "attach":
+            if blocked:
+                raise ToolError(f"{blocked[0]['_blocked']} Use delivery drive to send it as a Google Drive link.")
+            for f in files:
+                f["delivery"] = "attach"
+        elif delivery == "drive":
+            for f in files:
+                f["delivery"] = "drive"
+        else:
+            for f in files:
+                f["delivery"] = "drive" if "_blocked" in f else "attach"
+            for f in sorted([f for f in files if f["delivery"] == "attach"], key=lambda f: -f["size"]):
+                if sum(x["size"] for x in files if x["delivery"] == "attach") <= mailfiles.MAX_TOTAL:
+                    break
+                f["delivery"] = "drive"            # the biggest files go by Drive until the rest fits
+        for f in files:
+            f.pop("_blocked", None)
+        attached = sum(f["size"] for f in files if f["delivery"] == "attach")
+        if attached > mailfiles.MAX_TOTAL:
+            raise ToolError("The attachments are over 18 MB together, more than Gmail can send. Use delivery auto or "
+                            "drive to send the big ones as Google Drive links.")
+        drive = [f for f in files if f["delivery"] == "drive"]
+        a["files"] = files
+        a["share"] = []
+        if not drive:
+            return
+        if any(f["size"] > mailfiles.MAX_DRIVE for f in drive):
+            raise ToolError(f"Files over {mailfiles.size_text(mailfiles.MAX_DRIVE)} can't be sent, even by Drive.")
+        if a["bcc"]:
+            raise ToolError("Drive links can't go to Bcc recipients: everyone with access can see who else has it. "
+                            "Send the Bcc recipients a separate email.")
+        if not self._has_drive():
+            raise ToolError(NO_DRIVE)
+        a["share"] = sorted({addr.lower() for _, addr in email.utils.getaddresses(a["to"] + a["cc"]) if addr})
+
+    def _has_drive(self) -> bool:
+        if self._scopes is None:
+            self._access = None
+            self._token()
+        return DRIVE_SCOPE in (self._scopes or set())
 
     def _file_bytes(self, f: dict[str, Any]) -> bytes:
         if "data" in f:
             data = base64.b64decode(f["data"])
         elif "path" in f:
             try:
-                data = mailfiles.read_path(mailfiles.check_path(f["path"]), mailfiles.MAX_TOTAL)
+                data = mailfiles.read_path(mailfiles.check_path(f["path"]), mailfiles.MAX_DRIVE)
             except mailfiles.FileProblem as e:
                 raise ToolError(f"{f['name']}: {e} Nothing was sent.") from None
         else:
-            _, data = self._part(f["message_id"], f["part"], limit=mailfiles.MAX_TOTAL)
+            _, data = self._part(f["message_id"], f["part"], limit=mailfiles.MAX_DRIVE)
         if len(data) != f["size"] or hashlib.sha256(data).hexdigest() != f["sha256"]:
             raise ToolError(f"{f['name']} changed after it was approved, so nothing was sent. Ask again.")
         return data
@@ -387,6 +514,8 @@ class Gmail(Connector):
             msg["References"] = a.get("references") or a["in_reply_to"]
         msg.set_content(a["body"])
         for f in a.get("files", []):
+            if f.get("delivery") == "drive":
+                continue
             maintype, _, subtype = f["type"].partition("/")
             msg.add_attachment(self._file_bytes(f), maintype=maintype, subtype=subtype, filename=f["name"])
         if a.get("forward_id"):
@@ -396,24 +525,145 @@ class Gmail(Connector):
         return msg
 
     def _send(self, a: dict[str, Any]) -> Any:
+        return self._with_drive(a, self._send_mail)
+
+    def _send_mail(self, a: dict[str, Any]) -> dict[str, Any]:
         raw = self._mime(a).as_bytes()
         meta: dict[str, Any] = {"threadId": a["thread_id"]} if a.get("thread_id") else {}
         if len(raw) > UPLOAD_OVER:
             r = self._upload("/messages/send", raw, meta)
         else:
             r = self._post("/messages/send", {"raw": _b64(raw), **meta})
-        out = {"sent": True, "message_id": r.get("id"), "thread_id": r.get("threadId")}
-        if a.get("files"):
-            out["attachments"] = len(a["files"])
-        return out
+        return {"sent": True, "message_id": r.get("id"), "thread_id": r.get("threadId")}
 
     def _draft(self, a: dict[str, Any]) -> Any:
+        return self._with_drive(a, self._save_draft)
+
+    def _save_draft(self, a: dict[str, Any]) -> dict[str, Any]:
         raw = self._mime(a).as_bytes()
         if len(raw) > UPLOAD_OVER:
             r = self._upload("/drafts", raw, {})
         else:
             r = self._post("/drafts", {"message": {"raw": _b64(raw)}})
         return {"draft_saved": True, "draft_id": r.get("id"), "note": "The user can review and send it from Gmail."}
+
+    # -- Google Drive links ----------------------------------------------------------------
+
+    def _with_drive(self, a: dict[str, Any], deliver: Callable[[dict[str, Any]], dict[str, Any]]) -> Any:
+        """Upload → share with exactly the approved list → send. If anything fails, the shares are removed and the
+        uploads trashed, so nothing stays shared for an email that never went out."""
+        drive = [f for f in a.get("files", []) if f.get("delivery") == "drive"]
+        done: list[dict[str, Any]] = []
+        try:
+            for f in drive:
+                data = self._file_bytes(f)
+                fid, link = self._drive_upload(f["name"], f["type"], data)
+                item = {"name": f["name"], "size": f["size"], "file_id": fid, "link": link, "perms": [],
+                        "invited": []}
+                done.append(item)
+                for addr in a["share"]:
+                    pid, invited = self._drive_share(fid, addr)
+                    item["perms"].append(pid)
+                    if invited:
+                        item["invited"].append(addr)
+            if done:
+                a = dict(a, body=_with_links(a["body"], done))
+            out = deliver(a)
+        except Exception:
+            for item in done:
+                self._drive_undo(item)
+            raise
+        attached = [f for f in a.get("files", []) if f.get("delivery") != "drive"]
+        if attached:
+            out["attachments"] = len(attached)
+        if done:
+            out["drive_links"] = [{"name": d["name"], "link": d["link"], "file_id": d["file_id"]} for d in done]
+            out["shared_with"] = a["share"]
+            invited = sorted({x for d in done for x in d["invited"]})
+            if invited:
+                out["note"] = ("Google also emailed its own sharing invitation to " + ", ".join(invited) +
+                               " (no Google account found for them).")
+        return out
+
+    def _drive(self, method: str, url: str, **kw: Any) -> httpx.Response:
+        for attempt in (1, 2):
+            headers = {"Authorization": f"Bearer {self._token()}", **kw.pop("headers", {})}
+            r = self.http.request(method, url, headers=headers, **kw)
+            if r.status_code == 401 and attempt == 1:
+                self._access = None
+                kw["headers"] = {k: v for k, v in headers.items() if k != "Authorization"}
+                continue
+            return r
+        return r
+
+    def _drive_ok(self, r: httpx.Response) -> dict[str, Any]:
+        if r.status_code < 300:
+            return _json(r) if r.content else {}
+        err = _json(r).get("error")
+        reasons = [e.get("reason", "") for e in (err.get("errors") or [])] if isinstance(err, dict) else []
+        if "accessNotConfigured" in reasons or "SERVICE_DISABLED" in r.text:
+            raise ToolError("The Google Drive API is turned off in the user's Google Cloud project. Ask them to "
+                            "enable it (Google Cloud console, APIs & Services, Library, Google Drive API).")
+        if r.status_code in (401, 403) and ("insufficient" in r.text.lower() or "scope" in r.text.lower()):
+            raise ToolError(NO_DRIVE)
+        if r.status_code == 404:
+            raise ToolError("Google Drive says that file doesn't exist (or wasn't shared by aiSecurityWarden).")
+        if r.status_code == 429 or r.status_code >= 500:
+            raise ToolError(f"Google Drive is busy or unavailable ({r.status_code}); try again in a minute.")
+        msg = err.get("message", "") if isinstance(err, dict) else ""
+        raise ToolError(f"Google Drive refused the request ({r.status_code}{': ' + msg[:200] if msg else ''}).")
+
+    def _drive_folder(self) -> str:
+        if self._folder:
+            return self._folder
+        q = (f"name = '{DRIVE_FOLDER}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false "
+             "and 'root' in parents")
+        found = self._drive_ok(self._drive("GET", DRIVE + "/files", params={"q": q, "fields": "files(id)",
+                                                                             "spaces": "drive"})).get("files") or []
+        if found:
+            self._folder = found[0]["id"]
+        else:
+            self._folder = self._drive_ok(self._drive("POST", DRIVE + "/files", params={"fields": "id"}, json={
+                "name": DRIVE_FOLDER, "mimeType": "application/vnd.google-apps.folder",
+                "appProperties": {"aisecuritywarden": "1"}}))["id"]
+        return self._folder
+
+    def _drive_upload(self, name: str, mime: str, data: bytes) -> tuple[str, str]:
+        folder = self._drive_folder()
+        start = self._drive("POST", DRIVE_UPLOAD + "/files", params={"uploadType": "resumable"},
+                            headers={"X-Upload-Content-Type": mime, "X-Upload-Content-Length": str(len(data))},
+                            json={"name": name, "parents": [folder], "appProperties": {"aisecuritywarden": "1"}})
+        self._drive_ok(start)
+        session = start.headers.get("Location", "")
+        if not session.startswith(DRIVE_UPLOAD):
+            raise ToolError("Google Drive didn't start the upload.")
+        done = self._drive_ok(self._drive("PUT", session, content=data, headers={"Content-Type": mime}))
+        fid = done.get("id", "")
+        if not DRIVE_ID_RE.match(fid):
+            raise ToolError("Google Drive's upload reply was incomplete.")
+        meta = self._drive_ok(self._drive("GET", f"{DRIVE}/files/{fid}", params={"fields": "id,webViewLink"}))
+        return fid, meta.get("webViewLink") or f"https://drive.google.com/file/d/{fid}/view"
+
+    def _drive_share(self, fid: str, addr: str) -> tuple[str, bool]:
+        """View-only access for one person. Only ever type "user": never "anyone" or "domain"."""
+        body = {"type": "user", "role": "reader", "emailAddress": addr}
+        r = self._drive("POST", f"{DRIVE}/files/{fid}/permissions",
+                        params={"sendNotificationEmail": "false", "fields": "id"}, json=body)
+        invited = False
+        if r.status_code == 400 and "invalidSharingRequest" in r.text:
+            # no Google account for this address: Google only allows sharing with its own invitation email
+            r = self._drive("POST", f"{DRIVE}/files/{fid}/permissions",
+                            params={"sendNotificationEmail": "true", "fields": "id"}, json=body)
+            invited = True
+        return self._drive_ok(r)["id"], invited
+
+    def _drive_undo(self, item: dict[str, Any]) -> None:
+        try:
+            for pid in item["perms"]:
+                self._drive("DELETE", f"{DRIVE}/files/{item['file_id']}/permissions/{pid}")
+            self._drive("PATCH", f"{DRIVE}/files/{item['file_id']}", json={"trashed": True})
+        except Exception as e:  # noqa: BLE001 - best effort; the error that matters is the original one
+            print(f"sw-mcp: gmail: couldn't undo a Drive share ({type(e).__name__})", file=sys.stderr)
 
     def _upload(self, path: str, raw: bytes, meta: dict[str, Any]) -> dict[str, Any]:
         """A big email through Gmail's upload endpoint (a JSON body is limited to a few MB)."""
@@ -497,6 +747,10 @@ class Gmail(Connector):
             raise ToolError(f"Couldn't sign in to Gmail ({err}).")
         data = r.json()
         self._access = data["access_token"]
+        if isinstance(data.get("scope"), str):
+            self._scopes = set(data["scope"].split())
+        elif self._scopes is None:
+            self._scopes = {GMAIL_SCOPE}
         self._access_exp = time.monotonic() + max(0, int(data.get("expires_in", 3600)) - 60)
         return self._access
 
@@ -597,6 +851,13 @@ def _check_id(mid: str) -> str:
     return mid
 
 
+def _with_links(body: str, items: list[dict[str, Any]]) -> str:
+    lines = [f"- {d['name']} ({mailfiles.size_text(d['size'])}): {d['link']}" for d in items]
+    return (body.rstrip() + "\n\n" if body.strip() else "") + (
+        "Files on Google Drive, shared with you only (sign in to Google with this email address to open them; a "
+        "free Google account can use any email address):\n" + "\n".join(lines) + "\n")
+
+
 def _check_part(part: str) -> str:
     if not isinstance(part, str) or not PART_RE.match(part):
         raise ToolError(f"{part!r} isn't an attachment part (use the part from gmail_read, like \"1\").")
@@ -663,11 +924,17 @@ def _mail_summary(title: str, a: dict[str, Any]) -> Summary:
     if a["bcc"]:
         fields.append(("Bcc", ", ".join(a["bcc"])))
     fields.append(("Subject", a["subject"] or "(no subject)"))
-    if a.get("files"):
-        fields.append((f"Attachments ({len(a['files'])})", "; ".join(
-            f"{f['name']} · {mailfiles.size_text(f['size'])} · {f['type']} · sha {f['sha256'][:8]}"
-            + (" · from an email" if "message_id" in f else "")
-            + (f" · file {f['path']}" if "path" in f else "") for f in a["files"])))
+    def describe(f: dict[str, Any]) -> str:
+        return (f"{f['name']} · {mailfiles.size_text(f['size'])} · {f['type']} · sha {f['sha256'][:8]}"
+                + (" · from an email" if "message_id" in f else "")
+                + (f" · file {f['path']}" if "path" in f else ""))
+    attached = [f for f in a.get("files", []) if f.get("delivery") != "drive"]
+    drive = [f for f in a.get("files", []) if f.get("delivery") == "drive"]
+    if attached:
+        fields.append((f"Attachments ({len(attached)})", "; ".join(describe(f) for f in attached)))
+    if drive:
+        fields.append((f"Drive links ({len(drive)})", "; ".join(describe(f) for f in drive)))
+        fields.append(("Drive: view only for", ", ".join(a["share"])))
     return Summary(title, fields, preview=a["body"] or None)
 
 

@@ -14,7 +14,8 @@ What you end up with:
 ## 1. Google Cloud (once, about 10 minutes)
 
 1. Go to <https://console.cloud.google.com/>, create a project (e.g. "aiSecurityWarden Gmail").
-2. **APIs & Services → Library**: enable the **Gmail API**.
+2. **APIs & Services → Library**: enable the **Gmail API**, and the **Google Drive API** for big files as Drive
+   links (optional; the connector only ever sees files it uploaded itself).
 3. **Google Auth Platform → Branding / Audience** (older consoles: **OAuth consent screen**): user type
    **External**, fill in an app name and your email. Under **Audience**, add the Gmail address the agent will
    use as a test user, then press **Publish app** so the status is **In production**. (In "Testing", Google
@@ -139,7 +140,30 @@ secret; the token itself never goes in the MCP settings.
 - File types Gmail blocks (`.exe`, `.js`, `.bat`, …), zips holding them or protected by a password, and archives
   Gmail can't look into (`.7z`, `.rar`, …) are refused before you're asked. Names lose folders, quotes and line
   breaks; the type comes from the extension.
-- Not yet: big files as Google Drive links.
+
+### Google Drive links (client 0.7.10)
+
+- Files Gmail can't carry go to your Google Drive instead, in a folder **aiSecurityWarden shared**, and the email
+  carries a link to each. `delivery` on send / reply / forward / draft decides:
+  - `auto` (default): attach; only files over the 18 MB total (biggest first) or of a type Gmail blocks go by Drive.
+  - `attach`: never Drive (a file that doesn't fit is refused).
+  - `drive`: every file as a Drive link. Ask for it ("send it as a Drive link") when you'd rather share than attach.
+- **Who can open it: only the To and Cc recipients**, view only, each by their own email address. The connector
+  computes this list from the recipients; the agent can't name anyone else, and it never creates "anyone with the
+  link" or domain-wide access. Drive links with Bcc are refused (people with access can see who else has it).
+- The approval request lists the Drive files and **"Drive: view only for"** with the exact addresses.
+- Order when it runs: upload, share, send. If sending fails, the shares are removed and the file goes to the Drive
+  trash. A **draft** with Drive links is high risk, because the files are shared when the draft is saved.
+- Recipients without a Google account: Google only allows sharing with them through its own invitation email, so
+  they get that as well (the result says so). To open the file they sign in to Google with that address (a free
+  Google account can use any email address).
+- Up to 100 MB per file. `gmail_drive_shared` lists what was shared and with whom; `gmail_drive_unshare` removes
+  everyone's access (and can move the file to the Drive trash). Suggested rule: `gmail.drive_unshare=allow`, since it
+  only ever reduces access.
+- **Needs Drive access on the Google sign-in** (the `drive.file` scope: files this app uploaded, nothing else in
+  your Drive). Existing set-ups: enable the Google Drive API in your Google Cloud project, then **Connectors → Gmail
+  → Reconnect** on the website (or `sw-mcp login gmail`) and leave Google Drive ticked. Without it, everything else
+  works and Drive links are refused with that instruction.
 
 ### The outbox and other folders
 

@@ -94,6 +94,7 @@ class Plan:
     args: dict[str, Any]
     summary: Summary
     run: Callable[[dict[str, Any]], Any]
+    risk: str | None = None     # raise the tool's declared risk for this call (never lowers it)
 
 
 @dataclass(frozen=True)
@@ -676,7 +677,10 @@ class Hub:
             self.log(f"{name}: preparing failed: {type(e).__name__}")
             return Result(f"Preparing the action failed ({type(e).__name__}).", True)
 
-        return self._gate(name, spec.action, spec.risk, plan, digest)
+        risk = spec.risk
+        if plan.risk in RISKS and RISKS.index(plan.risk) > RISKS.index(risk):
+            risk = plan.risk
+        return self._gate(name, spec.action, risk, plan, digest)
 
     def _gate(self, name: str, action: str, risk: str, plan: Plan, digest: str) -> Result:
         """Ask aiSecurityWarden whether this prepared action may run now; run it, or tell the AI to wait."""
