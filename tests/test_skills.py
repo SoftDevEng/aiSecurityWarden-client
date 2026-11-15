@@ -79,7 +79,8 @@ def test_sw_mcp_skill_command(tmp_path, monkeypatch, capsys):
 
 def test_every_agent_gets_the_core_rules_without_a_skill():
     for rule in ("check_approval", "untrusted", "securitywarden_update", "never pip or pipx",
-                 "never kill or restart sw-mcp", "securitywarden_setup", "token files"):
+                 "never kill or restart sw-mcp", "securitywarden_setup", "token files", "outbox folder",
+                 "never look for credentials", "outside aiSecurityWarden"):
         assert rule in INSTRUCTIONS, rule
 
 

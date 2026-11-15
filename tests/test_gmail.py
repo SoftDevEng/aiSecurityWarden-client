@@ -465,3 +465,86 @@ def test_reading_a_pdf(hub, google, sw):
     google.pdf = b"%PDF-1.4 garbage"
     d = _inner(hub.call("gmail_attachment", {"message_id": "m1", "part": "1"}))
     assert d["text"] is None and "couldn't be read" in d["note"]
+
+
+# -- files from the outbox -----------------------------------------------------------------
+
+@pytest.fixture
+def box(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "id_ed25519").write_text("PRIVATE KEY")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("SW_ATTACHMENT_FOLDERS", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    out = home / "outbox"
+    monkeypatch.setenv("SW_OUTBOX", str(out))
+    from securitywarden.mcp import mailfiles
+    mailfiles.make_outbox()
+    return out
+
+
+def _send_files(hub, files):
+    return hub.call("gmail_send", {"to": ["bob@example.com"], "subject": "s", "body": "b", "attachments": files})
+
+
+def test_a_file_saved_in_the_outbox_is_attached_and_checked_again(hub, google, sw, box):
+    (box / "report.pdf").write_bytes(b"%PDF-1.4 report")
+    r = _send_files(hub, [{"path": "report.pdf"}])
+    fields = dict(map(tuple, sw.requests[r.data["request_id"]]["summary"]["fields"]))
+    assert "report.pdf" in fields["Attachments (1)"] and str(box) in fields["Attachments (1)"]
+    _approve(hub, sw, r)
+    att = list(_sent(google.sent[0]["raw"]).iter_attachments())
+    assert att[0].get_filename() == "report.pdf" and att[0].get_payload(decode=True) == b"%PDF-1.4 report"
+
+    r = _send_files(hub, [{"path": str(box / "report.pdf"), "name": "Q3 report.pdf"}])
+    (box / "report.pdf").write_bytes(b"%PDF-1.4 swapped after asking")
+    out = _approve(hub, sw, r)
+    assert out.is_error and "changed after it was approved" in out.text and len(google.sent) == 1
+
+
+def test_files_outside_the_outbox_are_refused(hub, google, sw, box, tmp_path, monkeypatch):
+    import os
+    home = tmp_path / "home"
+    (home / "notes.txt").write_text("x")
+    (box / ".env").write_text("SECRET=1")
+    (box / ".hidden").mkdir()
+    (box / ".hidden" / "a.txt").write_text("x")
+    (box / "sub").mkdir()
+    bad = ["../notes.txt", str(home / "notes.txt"), str(home / ".ssh" / "id_ed25519"), "/etc/passwd", ".env",
+           ".hidden/a.txt", "missing.pdf", "sub", ""]
+    if hasattr(os, "symlink"):
+        os.symlink(home / ".ssh" / "id_ed25519", box / "key.txt")             # a link out of the outbox
+        os.symlink(home / ".ssh", box / "dir")
+        bad += ["key.txt", "dir/id_ed25519"]
+    for p in bad:
+        r = _send_files(hub, [{"path": p}])
+        assert r.is_error, p
+        assert "PRIVATE KEY" not in r.text
+    assert "outbox" in _send_files(hub, [{"path": "/etc/passwd"}]).text     # says where files must go
+    assert sw.requests == {} and google.sent == []
+
+
+def test_extra_folders_are_the_users_choice_and_never_too_broad(hub, sw, box, tmp_path, monkeypatch):
+    import os
+    from securitywarden.mcp import mailfiles
+    home = tmp_path / "home"
+    docs = home / "Documents"
+    docs.mkdir()
+    (docs / "plan.md").write_text("# plan")
+    assert _send_files(hub, [{"path": str(docs / "plan.md")}]).is_error
+    monkeypatch.setenv("SW_ATTACHMENT_FOLDERS", os.pathsep.join([str(docs), str(home), str(home / ".ssh"), "/"]))
+    roots = mailfiles.attachment_roots()
+    assert os.path.realpath(docs) in roots and os.path.realpath(home) not in roots
+    assert os.path.realpath(home / ".ssh") not in roots and os.path.abspath(os.sep) not in roots
+    assert not _send_files(hub, [{"path": str(docs / "plan.md")}]).is_error
+    assert _send_files(hub, [{"path": str(home / ".ssh" / "id_ed25519")}]).is_error
+
+
+def test_the_agent_is_told_where_to_save_files(box):
+    from securitywarden.mcp import gmail
+    from securitywarden.mcp.server import INSTRUCTIONS
+    desc = gmail._FILES["description"]
+    assert "outbox folder" in desc and '"path"' in desc
+    assert "outbox folder" in INSTRUCTIONS

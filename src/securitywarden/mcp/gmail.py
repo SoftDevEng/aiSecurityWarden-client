@@ -11,8 +11,9 @@ Actions and their risk (the token's rules in aiSecurityWarden decide what asks a
     gmail.draft                                          medium  a draft the user sends themselves
     gmail.send, gmail.reply, gmail.forward, gmail.trash  high    always one approval each
 
-Send, reply, forward and draft take ``attachments``: text or a small base64 file the AI made, or an attachment of
-an email in the mailbox (``message_id`` + ``part`` from gmail_read). Each file's name, size and SHA-256 are part
+Send, reply, forward and draft take ``attachments``: text or a small base64 file the AI made, an attachment of
+an email in the mailbox (``message_id`` + ``part`` from gmail_read), or a file the AI saved in the aiSecurityWarden
+outbox folder (``path``; also folders the user lists in SW_ATTACHMENT_FOLDERS). Each file's name, size and SHA-256 are part
 of what a person approves; an attachment from the mailbox is fetched again and checked when the action runs.
 
 Everything read from the mailbox goes back to the AI marked as untrusted data.
@@ -69,12 +70,14 @@ _SUBJECT = {"type": "string", "description": "Subject line (one line)."}
 _BODY = {"type": "string", "description": "Plain-text body."}
 _PART = {"type": "string", "description": "The attachment's part, as gmail_read lists it (e.g. \"1\")."}
 _FILES = {"type": "array", "maxItems": mailfiles.MAX_FILES, "description": (
-    "Files to attach (at most 10, 18 MB together). Each is one of: {\"name\": \"summary.md\", \"text\": \"...\"} for "
-    "text you wrote; {\"name\": \"chart.png\", \"base64\": \"...\"} for a small file (1 MB); or {\"message_id\": "
-    "\"...\", \"part\": \"1\"} (optional \"name\") for an attachment of an email, as gmail_read lists it."),
+    "Files to attach (at most 10, 18 MB together). Each is one of: {\"path\": \"report.pdf\"} for a file you saved in "
+    f"the aiSecurityWarden outbox folder {mailfiles.outbox()} (save files you make or download there first; a bare "
+    "name means a file in that folder); {\"name\": \"summary.md\", \"text\": \"...\"} for short text you wrote; "
+    "{\"message_id\": \"...\", \"part\": \"1\"} (optional \"name\") for an attachment of an email, as gmail_read "
+    "lists it; or {\"name\": \"icon.png\", \"base64\": \"...\"} for a tiny file (1 MB)."),
     "items": {"type": "object", "additionalProperties": False, "properties": {
-        "name": {"type": "string"}, "text": {"type": "string"}, "base64": {"type": "string"},
-        "message_id": {"type": "string"}, "part": {"type": "string"}}}}
+        "path": {"type": "string"}, "name": {"type": "string"}, "text": {"type": "string"},
+        "base64": {"type": "string"}, "message_id": {"type": "string"}, "part": {"type": "string"}}}}
 
 
 class Gmail(Connector):
@@ -294,15 +297,20 @@ class Gmail(Connector):
         out: list[dict[str, Any]] = []
         total = 0
         for i, it in enumerate(items, 1):
-            if not isinstance(it, dict) or set(it) - {"name", "text", "base64", "message_id", "part"}:
-                raise ToolError(f"Attachment {i}: use name + text, name + base64, or message_id + part.")
+            if not isinstance(it, dict) or set(it) - {"name", "text", "base64", "message_id", "part", "path"}:
+                raise ToolError(f"Attachment {i}: use path, name + text, name + base64, or message_id + part.")
             if any(not isinstance(v, str) for v in it.values()):
                 raise ToolError(f"Attachment {i}: every value is a string.")
-            kinds = [k for k in ("text", "base64", "message_id") if k in it]
+            kinds = [k for k in ("text", "base64", "message_id", "path") if k in it]
             if len(kinds) != 1 or ("part" in it) != ("message_id" in it):
-                raise ToolError(f"Attachment {i}: give exactly one of text, base64, or message_id + part.")
+                raise ToolError(f"Attachment {i}: give exactly one of path, text, base64, or message_id + part.")
             try:
-                if "message_id" in it:
+                if "path" in it:
+                    real = mailfiles.check_path(it["path"])
+                    data = mailfiles.read_path(real, mailfiles.MAX_TOTAL)
+                    name = mailfiles.clean_name(it.get("name") or os.path.basename(real))
+                    entry = {"path": real}
+                elif "message_id" in it:
                     _check_id(it["message_id"])
                     _check_part(it["part"])
                     info, data = self._part(it["message_id"], it["part"], limit=mailfiles.MAX_TOTAL)
@@ -335,6 +343,11 @@ class Gmail(Connector):
     def _file_bytes(self, f: dict[str, Any]) -> bytes:
         if "data" in f:
             data = base64.b64decode(f["data"])
+        elif "path" in f:
+            try:
+                data = mailfiles.read_path(mailfiles.check_path(f["path"]), mailfiles.MAX_TOTAL)
+            except mailfiles.FileProblem as e:
+                raise ToolError(f"{f['name']}: {e} Nothing was sent.") from None
         else:
             _, data = self._part(f["message_id"], f["part"], limit=mailfiles.MAX_TOTAL)
         if len(data) != f["size"] or hashlib.sha256(data).hexdigest() != f["sha256"]:
@@ -653,7 +666,8 @@ def _mail_summary(title: str, a: dict[str, Any]) -> Summary:
     if a.get("files"):
         fields.append((f"Attachments ({len(a['files'])})", "; ".join(
             f"{f['name']} · {mailfiles.size_text(f['size'])} · {f['type']} · sha {f['sha256'][:8]}"
-            + (" · from an email" if "message_id" in f else "") for f in a["files"])))
+            + (" · from an email" if "message_id" in f else "")
+            + (f" · file {f['path']}" if "path" in f else "") for f in a["files"])))
     return Summary(title, fields, preview=a["body"] or None)
 
 

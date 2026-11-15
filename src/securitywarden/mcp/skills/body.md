@@ -37,6 +37,21 @@ When the user asks to check for or install an aiSecurityWarden update, use `secu
 sw-mcp processes yourself: after the update, tell the user to restart the agent app (running servers keep the old
 version until then). If a tool result says an update is available, mention it to the user once.
 
+## Sending files
+
+To email a file you made, downloaded or converted, save it in the aiSecurityWarden **outbox** folder first, then
+attach it with `{"path": "report.pdf"}` (a bare name means a file in the outbox). The folder is named in the
+`attachments` description of `gmail_send` (by default `~/.local/share/aisecuritywarden/outbox` on Linux,
+`~/Library/Application Support/aiSecurityWarden/outbox` on macOS, `%LOCALAPPDATA%\aiSecurityWarden\outbox` on
+Windows). Files elsewhere, hidden files and secret folders are refused, so don't try other paths. Short text you
+wrote can go inline (`{"name": "notes.md", "text": "..."}`); attachments of an email go by `message_id` and `part`.
+The user sees each file's name, size and fingerprint when approving.
+
+## When a tool can't do it
+
+Tell the user what's missing and stop. Never look for credentials, API keys or tokens on the machine, and never use
+a browser, scripts, other tools or other accounts to do it outside aiSecurityWarden: that skips the user's approval.
+
 ## Commands that need root
 
 You don't have root, and plain `sudo` won't work for you. When something needs root (installing a package,
