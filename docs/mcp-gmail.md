@@ -170,8 +170,9 @@ secret; the token itself never goes in the MCP settings.
 ## The agent shows old tools after an update
 
 `sw-mcp doctor` shows the new tools but the agent doesn't (e.g. no `attachments` on `gmail_send` after 0.7.7):
-the agent app kept the old list. Quit the agent app completely (for Hermes: the desktop app and the gateway) and
-start it again, then open a new chat. Hermes also keeps MCP tool lists in `~/.hermes/cache/mcp_schema_cache.json`;
+the agent app kept the old list. Restart the program the update result named (from 0.7.9 it names the process that
+runs `sw-mcp`, e.g. Hermes's dashboard backend or gateway; the desktop app may only connect to it), then open a new
+chat. Hermes also keeps MCP tool lists in `~/.hermes/cache/mcp_schema_cache.json`;
 if the old list survives a full restart, delete that file while Hermes is stopped. Don't let the agent kill
 processes or edit its own caches to get there.
 

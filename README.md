@@ -120,7 +120,9 @@ sw-mcp update             # installs the newest signed release; never an older o
 ```
 
 Or ask your agent: "check for aiSecurityWarden updates" / "update aiSecurityWarden". The agent's
-`securitywarden_update` tool asks you to approve the exact version first. Restart the agent app afterwards. When a
+`securitywarden_update` tool asks you to approve the exact version first. Its result names the program to restart
+(the one that actually runs `sw-mcp`: for Hermes that can be the gateway or dashboard backend, not the desktop app);
+the agent tells you and restarts nothing itself. When a
 newer client is out, the agent is told once (and every time if the server requires it). Updates are signed with
 an offline release key and checked against the key built into the client; see DESIGN.md "Client updates".
 
