@@ -262,6 +262,8 @@ def cmd_serve(args: argparse.Namespace) -> None:
     for path in refresh_installed():          # skills from `sw-mcp skill install` follow client updates
         print(f"sw-mcp: refreshed the agent skill {path} for this version", file=sys.stderr, flush=True)
     hub = _hub(args, cfg)
+    from .mailfiles import make_outbox
+    make_outbox()                      # where the agent saves files to attach them (named in the tool descriptions)
     if hub.client is None:
         print("sw-mcp: no token yet: the agent can set up with a one-time code (securitywarden_setup), or run "
               "sw-mcp setup", file=sys.stderr, flush=True)

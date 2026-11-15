@@ -203,3 +203,116 @@ def _docx_text(data: bytes) -> tuple[str | None, str]:
         paras.append("".join(t.text or "" for t in p.iter(_W + "t")))
     text = "\n".join(paras).strip()
     return (text, "docx") if text else (None, "the document has no text")
+
+
+# -- files on this machine ----------------------------------------------------------------
+#
+# The agent attaches a file from disk only from the outbox (made for it, created on first use) or folders the user
+# lists in SW_ATTACHMENT_FOLDERS (in the MCP settings, separated like PATH). Hidden files and folders, aiSecurityWarden's
+# own files and the usual secret folders are refused even inside those, and so is any path that leads out of them.
+
+SECRET_DIRS = (".ssh", ".gnupg", ".config", ".aws", ".azure", ".kube", ".docker", ".hermes", ".claude", ".netrc")
+SECRET_NAMES = ("sw_tokens.json",)
+
+
+def outbox() -> str:
+    """The folder the agent saves files in to attach them (``SW_OUTBOX`` overrides it)."""
+    if os.environ.get("SW_OUTBOX"):
+        return os.path.abspath(os.path.expanduser(os.environ["SW_OUTBOX"]))
+    home = os.path.expanduser("~")
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local")
+        return os.path.join(base, "aiSecurityWarden", "outbox")
+    if sys.platform == "darwin":
+        return os.path.join(home, "Library", "Application Support", "aiSecurityWarden", "outbox")
+    base = os.environ.get("XDG_DATA_HOME") or os.path.join(home, ".local", "share")
+    return os.path.join(base, "aisecuritywarden", "outbox")
+
+
+def make_outbox() -> str:
+    path = outbox()
+    try:
+        os.makedirs(path, mode=0o700, exist_ok=True)
+    except OSError:
+        pass
+    return path
+
+
+def attachment_roots() -> list[str]:
+    """Real paths of the folders files may be attached from. Too-broad folders (a drive, the home folder) are
+    ignored."""
+    home = os.path.realpath(os.path.expanduser("~"))
+    wanted = [outbox()] + [p for p in os.environ.get("SW_ATTACHMENT_FOLDERS", "").split(os.pathsep) if p.strip()]
+    roots: list[str] = []
+    for p in wanted:
+        real = os.path.realpath(os.path.expanduser(p.strip()))
+        if real in (home, os.path.dirname(real)) or real == os.path.abspath(os.sep) or not os.path.isdir(real):
+            continue
+        if _is_secret(real, home) or real in roots:
+            continue
+        roots.append(real)
+    return roots
+
+
+def _is_secret(real: str, home: str) -> bool:
+    if os.path.basename(real).lower() in SECRET_NAMES or real.lower().endswith(".connectors.json"):
+        return True
+    for d in SECRET_DIRS:
+        secret = os.path.join(home, d)
+        if real == secret or real.startswith(secret + os.sep):
+            return True
+    cfg = os.environ.get("XDG_CONFIG_HOME")
+    if cfg and (real == os.path.realpath(cfg) or real.startswith(os.path.realpath(cfg) + os.sep)):
+        return True
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        sw = os.path.realpath(os.path.join(appdata, "SecurityWarden"))
+        if real == sw or real.startswith(sw + os.sep):
+            return True
+    return False
+
+
+def check_path(path: str) -> str:
+    """The real path of a file the agent may attach, or FileProblem. A bare name means a file in the outbox."""
+    roots = attachment_roots()
+    box = outbox()
+    if not isinstance(path, str) or not path.strip() or "\x00" in path:
+        raise FileProblem("Give the file's path.")
+    p = path.strip()
+    if sys.platform == "win32" and (p.startswith(("\\\\", "//")) or ":" in p[2:]):
+        raise FileProblem("Network paths and alternate streams can't be attached.")
+    p = os.path.expanduser(p)
+    if not os.path.isabs(p):
+        p = os.path.join(box, p)
+    real = os.path.realpath(p)
+    home = os.path.realpath(os.path.expanduser("~"))
+    root = next((r for r in roots if real.startswith(r + os.sep)), None)
+    if root is None:
+        raise FileProblem(f"Only files in the aiSecurityWarden outbox ({box}) can be attached. Save the file there "
+                          "first, then pass its name as path.")
+    rel = os.path.relpath(real, root)
+    if any(part.startswith(".") for part in rel.split(os.sep)) or _is_secret(real, home):
+        raise FileProblem("Hidden files and aiSecurityWarden's own files can't be attached.")
+    if not os.path.isfile(real):
+        raise FileProblem(f"There's no file {rel} in {root}.")
+    return real
+
+
+def read_path(real: str, limit: int) -> bytes:
+    """Read a checked file without following a link swapped in after the check."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(real, flags)
+    except OSError:
+        raise FileProblem(f"{os.path.basename(real)} can't be opened.") from None
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        now = os.stat(real, follow_symlinks=False)
+        if (st.st_dev, st.st_ino) != (now.st_dev, now.st_ino) or os.path.realpath(real) != real:
+            raise FileProblem(f"{os.path.basename(real)} changed while it was read.")
+        if st.st_size > limit:
+            raise FileProblem(f"{os.path.basename(real)} is too large ({size_text(st.st_size)}).")
+        data = f.read(limit + 1)
+    if len(data) > limit:
+        raise FileProblem(f"{os.path.basename(real)} is too large.")
+    return data

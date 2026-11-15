@@ -127,14 +127,36 @@ secret; the token itself never goes in the MCP settings.
   with a 20-second limit, so a hostile PDF can't hang `sw-mcp`. Images and other files have no text; they can still
   be forwarded or attached.
 - **Sending**: `gmail_send`, `gmail_reply`, `gmail_forward` and `gmail_draft` take `attachments`, at most 10 and
-  18 MB together: `{"name", "text"}` for text the agent wrote, `{"name", "base64"}` for a small file (1 MB), or
-  `{"message_id", "part"}` (optional `name`) for an attachment of an email in the mailbox.
-- What you approve is exactly the files: each file's SHA-256 is part of the action's digest. A file taken from an
-  email is fetched again when the action runs and refused if it changed.
+  18 MB together:
+  - `{"path": "report.pdf"}` for a file the agent saved in the **outbox** (client 0.7.8). A bare name means a file
+    in the outbox. The agent is told where the outbox is in the tool description and the server instructions, so
+    "make a PDF of this and email it to Bob" just works.
+  - `{"name", "text"}` for short text the agent wrote, `{"name", "base64"}` for a tiny file (1 MB).
+  - `{"message_id", "part"}` (optional `name`) for an attachment of an email in the mailbox.
+- What you approve is exactly the files: each file's SHA-256 is part of the action's digest, and the request shows
+  where a file on disk came from. Files from the outbox or an email are read again when the action runs and refused
+  if they changed.
 - File types Gmail blocks (`.exe`, `.js`, `.bat`, …), zips holding them or protected by a password, and archives
   Gmail can't look into (`.7z`, `.rar`, …) are refused before you're asked. Names lose folders, quotes and line
   breaks; the type comes from the extension.
-- Not yet: big files as Google Drive links, and files from the agent machine's disk.
+- Not yet: big files as Google Drive links.
+
+### The outbox and other folders
+
+| System | Outbox (created when `sw-mcp serve` starts) |
+|---|---|
+| Linux | `~/.local/share/aisecuritywarden/outbox` (or `$XDG_DATA_HOME/aisecuritywarden/outbox`) |
+| macOS | `~/Library/Application Support/aiSecurityWarden/outbox` |
+| Windows | `%LOCALAPPDATA%\aiSecurityWarden\outbox` |
+
+- Set `SW_OUTBOX` in the MCP entry's environment to use another folder.
+- To let the agent attach files from more folders, list them in `SW_ATTACHMENT_FOLDERS` in the MCP entry's
+  environment (separated by `:` on Linux and macOS, `;` on Windows), e.g. `SW_ATTACHMENT_FOLDERS: /home/me/Reports`.
+  Your home folder or a whole drive is ignored as too broad.
+- Always refused, even inside those folders: hidden files and folders, links that lead out of the folder,
+  aiSecurityWarden's token files, and `~/.ssh`, `~/.gnupg`, `~/.config`, `~/.aws`, `~/.hermes` and similar. On
+  Windows also network paths and alternate data streams.
+- Files stay in the outbox after sending; clear it out now and then.
 
 ## Good to know
 
@@ -144,6 +166,14 @@ secret; the token itself never goes in the MCP settings.
 - Revoking the aiSecurityWarden token stops the agent at once. To cut Gmail access too, remove the app at
   <https://myaccount.google.com/permissions>.
 - Waiting actions are kept by the `sw-mcp` process; if it restarts, the agent just asks again.
+
+## The agent shows old tools after an update
+
+`sw-mcp doctor` shows the new tools but the agent doesn't (e.g. no `attachments` on `gmail_send` after 0.7.7):
+the agent app kept the old list. Quit the agent app completely (for Hermes: the desktop app and the gateway) and
+start it again, then open a new chat. Hermes also keeps MCP tool lists in `~/.hermes/cache/mcp_schema_cache.json`;
+if the old list survives a full restart, delete that file while Hermes is stopped. Don't let the agent kill
+processes or edit its own caches to get there.
 
 ## The agent shows fewer tools than expected
 
