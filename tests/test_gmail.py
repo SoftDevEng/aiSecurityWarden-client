@@ -300,7 +300,8 @@ def test_bad_input_never_reaches_gmail(hub, google):
 def test_revoked_google_access_says_how_to_fix_it(hub, google, sw):
     google.revoked = True
     r = hub.call("gmail_search", {"query": "from:bob"})
-    assert r.is_error and "sw-mcp login gmail" in r.text
+    assert r.is_error and "sw-mcp login gmail" in r.text and "Reconnect Gmail" in r.text
+    assert "Testing" not in r.text
     assert "rtoken" not in r.text
 
 
@@ -754,3 +755,17 @@ def test_listing_and_unsharing(hub, google, sw, box):
     out = json.loads(_approve(hub, sw, u).text)
     assert out == {"unshared": True, "people_removed": 2, "trashed": True}
     assert google.drive_perms[fid] == {} and google.drive_files[fid]["trashed"] is True
+
+
+def test_an_ended_testing_sign_in_says_why_and_how_to_stop_it(google, monkeypatch):
+    class WithInfo(Secrets):
+        def fetch(self):
+            return {**super().fetch(), "GMAIL_SIGNIN_INFO": json.dumps({"v": 1, "mode": "testing"})}
+    sw = WithInfo({"gmail.read.search": "allow"})
+    cls = type("TestGmail", (Gmail,), {"transport": httpx.MockTransport(google)})
+    h = Hub(sw, [cls], log=lambda m: None)
+    google.revoked = True
+    r = h.call("gmail_search", {"query": "from:bob"})
+    assert r.is_error and "Testing" in r.text and "7 days" in r.text and "gmail-publish" in r.text
+    assert "rtoken" not in r.text
+    h.close()

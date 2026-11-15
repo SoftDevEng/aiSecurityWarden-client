@@ -19,7 +19,8 @@ What you end up with:
 3. **Google Auth Platform → Audience** (<https://console.cloud.google.com/auth/audience>; older consoles: **OAuth
    consent screen**): user type **External** (give an app name and your email if asked), and under **Test users**
    add the Gmail address the agent will use. That's enough to connect, but in **Testing** Google expires the
-   sign-in every 7 days (sign in again, or Reconnect on the website). Google Workspace: choose **Internal** instead
+   sign-in every 7 days (sign in again: the project's Secrets tab, **Reconnect Gmail**; the tab shows when the
+   sign-in ends). Google Workspace: choose **Internal** instead
    (project created with the Workspace account): no test users, no publishing, no 7-day expiry.
    - To stop the 7-day expiry, **Publish app**. Google first wants the **Branding** page complete: a home page,
      privacy policy and terms on a domain you own (use your own, not aisecuritywarden.com). No website? A free
@@ -166,8 +167,8 @@ secret; the token itself never goes in the MCP settings.
   everyone's access (and can move the file to the Drive trash). Suggested rule: `gmail.drive_unshare=allow`, since it
   only ever reduces access.
 - **Needs Drive access on the Google sign-in** (the `drive.file` scope: files this app uploaded, nothing else in
-  your Drive). Existing set-ups: enable the Google Drive API in your Google Cloud project, then **Connectors → Gmail
-  → Reconnect** on the website (or `sw-mcp login gmail`) and leave Google Drive ticked. Without it, everything else
+  your Drive). Existing set-ups: enable the Google Drive API in your Google Cloud project, then the project's **Secrets** tab
+  → **Reconnect Gmail** on the website (or `sw-mcp login gmail`) and leave Google Drive ticked. Without it, everything else
   works and Drive links are refused with that instruction.
 
 ### The outbox and other folders

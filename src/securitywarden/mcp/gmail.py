@@ -67,7 +67,7 @@ DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3"
 DRIVE_FOLDER = "aiSecurityWarden shared"
 DRIVE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,128}$")
 NO_DRIVE = ("Drive links need Google Drive access, which this Gmail sign-in doesn't have. Ask the user to reconnect "
-            "Gmail on the aiSecurityWarden website (Connectors, Gmail, Reconnect) and tick Google Drive, or run "
+            "Gmail on the aiSecurityWarden website (the project's Secrets tab, Reconnect Gmail) and tick Google Drive, or run "
             "sw-mcp login gmail on a computer with a browser.")
 
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -741,9 +741,10 @@ class Gmail(Connector):
             "client_secret": self.secret("GMAIL_CLIENT_SECRET"), "refresh_token": self.secret("GMAIL_REFRESH_TOKEN")})
         if r.status_code != 200:
             err = _json(r).get("error", r.status_code)
+            info = self._signin_info() if err == "invalid_grant" else {}     # from the secrets already fetched
             self.ctx.forget_secrets()        # perhaps the refresh token was replaced since: fetch again next time
             if err == "invalid_grant":
-                raise ToolError("Gmail access has expired or was revoked. Ask the user to run: sw-mcp login gmail")
+                raise ToolError(_expired_message(info))
             raise ToolError(f"Couldn't sign in to Gmail ({err}).")
         data = r.json()
         self._access = data["access_token"]
@@ -753,6 +754,14 @@ class Gmail(Connector):
             self._scopes = {GMAIL_SCOPE}
         self._access_exp = time.monotonic() + max(0, int(data.get("expires_in", 3600)) - 60)
         return self._access
+
+    def _signin_info(self) -> dict[str, Any]:
+        """GMAIL_SIGNIN_INFO from the website's Connect Gmail (optional; nothing secret in it)."""
+        try:
+            info = json.loads(self.ctx.secret("GMAIL_SIGNIN_INFO"))
+            return info if isinstance(info, dict) else {}
+        except Exception:  # noqa: BLE001 - missing or hand-edited: just give the general message
+            return {}
 
     def _call(self, method: str, path: str, base: str = API, extra_headers: dict[str, str] | None = None,
               **kw: Any) -> dict[str, Any]:
@@ -849,6 +858,17 @@ def _check_id(mid: str) -> str:
     if not ID_RE.match(mid or ""):
         raise ToolError(f"{mid!r} isn't a Gmail id.")
     return mid
+
+
+def _expired_message(info: dict[str, Any]) -> str:
+    """What the agent tells the user when Google no longer accepts the sign-in."""
+    how = ("Ask the user to sign in again: on the aiSecurityWarden website, the project's Secrets tab, Reconnect "
+           "Gmail (or sw-mcp login gmail on a computer with a browser).")
+    if info.get("mode") == "testing":
+        return ("Gmail access has ended: the user's Google app is in Testing, so Google ends the sign-in 7 days after "
+                f"it was made. {how} To stop this happening every week, they can publish the Google app: "
+                "https://aisecuritywarden.com/help.html#gmail-publish")
+    return f"Gmail access has expired or was revoked. {how}"
 
 
 def _with_links(body: str, items: list[dict[str, Any]]) -> str:
