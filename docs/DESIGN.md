@@ -385,7 +385,7 @@ arguments, once it is approved.
 ## MCP connectors
 
 `sw-mcp serve` is a Model Context Protocol server (stdio, JSON-RPC 2.0, one message per line; written on the
-standard library rather than the MCP SDK so the client keeps two dependencies). It serves the tools of the
+standard library rather than the MCP SDK so the client keeps few dependencies: `cryptography`, `httpx`, and `pypdf` for PDF attachments). It serves the tools of the
 enabled connectors plus `check_approval`. A connector is one class per application:
 
 - `name` (the action prefix), `secrets` (names it reads from the token's project), `suggested_rules`;
