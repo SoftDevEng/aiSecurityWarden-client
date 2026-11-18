@@ -666,6 +666,41 @@ def cmd_setup(args: argparse.Namespace) -> None:
           file=sys.stderr)
 
 
+def cmd_connect(args: argparse.Namespace) -> None:
+    """Add aiSecurityWarden's MCP server to an agent app's settings, for a token stored on this machine."""
+    from . import connect as cn
+    cfg = _config(args)
+    store = TokenStore()
+    url = args.server or os.environ.get("SW_SERVER_URL") or cfg.get("server")
+    tid = _store_pick(store, args, cfg, url)
+    if tid is None:
+        _die("no token stored on this machine yet. Make one on the aiSecurityWarden website (a project's Tokens tab), "
+             "then run: sw-mcp setup --server URL   (and type the one-time setup code the website shows)")
+    e = store.entry(tid) or {}
+    server = url or e.get("server")
+    if not server:
+        _die("the stored token has no server address: add --server URL")
+    name = args.name or cn.entry_name(e.get("name") or tid)
+    ent = cn.entry(args.command or cn.sw_mcp_command(), server, tid, e.get("name") or tid, args.connector)
+    try:
+        if args.app == "claude-desktop":
+            msg = cn.add_json(args.file or cn.claude_desktop_config(), name, ent, replace=args.replace,
+                              dry_run=args.dry_run)
+        elif args.app == "hermes":
+            msg = cn.add_hermes(args.file or cn.hermes_config(), name, ent, replace=args.replace, dry_run=args.dry_run)
+        elif args.app == "claude-code":
+            msg = cn.add_claude_code(name, ent, dry_run=args.dry_run)
+        else:
+            msg = "Paste this into the app's MCP settings:\n" + json.dumps({"mcpServers": {name: ent}}, indent=2)
+    except cn.ConnectError as err:
+        _die(str(err))
+    except OSError as err:
+        _die(f"couldn't change the settings: {err}")
+    print(msg)
+    if not args.dry_run:
+        print(cn.next_steps(args.app))
+
+
 def cmd_check(args: argparse.Namespace) -> None:
     """Check connectors for mistakes before using them (for people and for AI writing connectors)."""
     from .lint import check_connector
@@ -802,6 +837,16 @@ def main(argv: list[str] | None = None) -> None:
     su.add_argument("--replace", action="store_true", help="replace a token that is already stored")
     su.add_argument("--code-stdin", action="store_true", help="read the code from stdin instead of asking")
     su.set_defaults(fn=cmd_setup)
+    co = sub.add_parser("connect", help="add this MCP server to an agent app's settings (Claude Desktop, Claude "
+                                         "Code, Hermes), for a token stored here")
+    co.add_argument("app", choices=["claude-desktop", "claude-code", "hermes", "other"])
+    common(co)
+    co.add_argument("--name", help="the entry's name (default: aisecuritywarden-<token name>)")
+    co.add_argument("--file", help="the settings file to change (default: the app's usual one)")
+    co.add_argument("--command", help="how the app starts sw-mcp (default: its full path here)")
+    co.add_argument("--replace", action="store_true", help="swap an entry of the same name that differs")
+    co.add_argument("--dry-run", action="store_true", help="only show what would change")
+    co.set_defaults(fn=cmd_connect)
     up = sub.add_parser("update", help="install the newest aiSecurityWarden client (signed, never older)")
     common(up, connectors=False)
     up.add_argument("--check", action="store_true", help="only say whether an update is available (exit 2 if so)")

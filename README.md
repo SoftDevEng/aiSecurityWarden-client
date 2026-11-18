@@ -13,6 +13,20 @@ reading this code.
 
 Get an account and see how it works at **[aisecuritywarden.com](https://aisecuritywarden.com)**.
 
+### Install with your AI agent
+
+Tell your agent (Claude Desktop, Claude Code, Hermes Agent, …):
+
+> Install the aiSecurityWarden MCP server from https://github.com/SoftDevEng/aiSecurityWarden-client and follow its
+> llms-install.md.
+
+It installs the client, asks you for the one-time setup code from the website, adds itself to the app's MCP
+settings with `sw-mcp connect` (with a backup), and tells you what to restart. Creating the token, typing the code
+and approving the first session stay with you. The steps it follows:
+[llms-install.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/llms-install.md). By hand:
+`pipx install aisecuritywarden`, `sw-mcp setup --server https://app.aisecuritywarden.com`, then
+`sw-mcp connect claude-desktop` (or `claude-code`, `hermes`, `other`).
+
 This repository contains:
 
 - the Python client library (`securitywarden.client.SecurityWardenClient`);
