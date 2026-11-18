@@ -479,8 +479,8 @@
  "name_mac": [
   {
    "project_key_hex": "3a74952d758319a26dde87305569c00064b68638b646731d6734477c0ced303e",
-   "name": "WEBULL_APP_KEY",
-   "mac": "06def0efa376c2569336e63ff7444bf1fbeb86193f7a91105d0a8cdc45bc6b58"
+   "name": "MYAPP_API_KEY",
+   "mac": "bde6b2e8141ba841354f9c81eb967f9f15190821dc73cac0ead6d17747f782a3"
   },
   {
    "project_key_hex": "3a74952d758319a26dde87305569c00064b68638b646731d6734477c0ced303e",
@@ -539,10 +539,10 @@
   {
    "project_id": "LWSJwzJ2Bw9RH1xjXczR1Q",
    "project_key_hex": "3a74952d758319a26dde87305569c00064b68638b646731d6734477c0ced303e",
-   "name": "WEBULL_APP_KEY",
+   "name": "MYAPP_API_KEY",
    "value": "key-AAAA-1111",
-   "mac": "06def0efa376c2569336e63ff7444bf1fbeb86193f7a91105d0a8cdc45bc6b58",
-   "blob": "v1.KHd6hNHzWtLRjb-E6ZKXiqhiMBP6TJvOGElcOdKy8lxvW4MLmymrGLj0pcZG7xCZlU_yX1CtdnJswevDUBkY1LmNJH7y-g",
+   "mac": "bde6b2e8141ba841354f9c81eb967f9f15190821dc73cac0ead6d17747f782a3",
+   "blob": "v1.KHd6hNHzWtLRjb-E6ZKXiqhiKg_5SYfdBlhFNsa87idhVddfgzHiFqSgycZG73yFlU_yTA9Z5QBXIkW8gOlmOrkpqW37",
    "nonce_hex": "28777a84d1f35ad2d18dbf84"
   },
   {
@@ -959,7 +959,7 @@
     "digest": "12a721375bcaed371de71c39245b2138eab9c91043895bebb6d8bceb998ccae1"
    },
    {
-    "action": "webull.order.place",
+    "action": "shop.order.place",
     "args": {
      "symbol": "AAPL",
      "qty": 3,
@@ -969,7 +969,7 @@
      "note": null,
      "unicode": "café ✓"
     },
-    "digest": "e6172cd51e3939625094aecc52b2ab134bea29ad93762fa467005f53596fc600"
+    "digest": "4333e0f4c7c1ad5017802bff0ac6840a1bcc56728a164a2d6c70505781aec081"
    },
    {
     "action": "x.y",
@@ -1063,7 +1063,7 @@
       "mode": "deny"
      },
      {
-      "match": "webull.*",
+      "match": "shop.*",
       "mode": "each"
      }
     ]
@@ -1091,7 +1091,7 @@
       "mode": "deny"
      },
      {
-      "match": "webull.*",
+      "match": "shop.*",
       "mode": "each"
      }
     ]
@@ -1134,13 +1134,13 @@
      "window": null
     },
     {
-     "action": "webull",
+     "action": "shop",
      "risk": "low",
      "mode": null,
      "window": null
     },
     {
-     "action": "webull.order.place",
+     "action": "shop.order.place",
      "risk": "medium",
      "mode": "each",
      "window": null
@@ -1158,7 +1158,7 @@
      "window": null
     }
    ],
-   "describe": "gmail.read.*=allow, gmail.label=window:30m, gmail.delete=deny, webull.*=each via admin_ui, push:telegram",
+   "describe": "gmail.read.*=allow, gmail.label=window:30m, gmail.delete=deny, shop.*=each via admin_ui, push:telegram",
    "describe_default": "ask for every action via admin_ui (default)"
   },
   "bad_policies": [
@@ -1422,21 +1422,21 @@
     "project_id": "LWSJwzJ2Bw9RH1xjXczR1Q",
     "project_key_hex": "3a74952d758319a26dde87305569c00064b68638b646731d6734477c0ced303e",
     "mac": "894d8008118394c58d2095dd90ab851f0aac862b5af56210624ec13a4c372036",
-    "blob": "v1.kpfsFJYDdSprM4CgOWzJ2kPKkBPOkMJw1JzXfKGZ8ZrDoxXioWCvqJ7zc2V5vUY3jrsvTt62G1mC_g"
+    "blob": "v1.kpfsFJYDdSprM4CgOWzJ2kPKig_Nld5jyo3Oc7WX7eHNrUG2uXj18sHOzjFkjn160WjtOp_A_QYB"
    },
    {
     "why": "blob moved to another name",
     "project_id": "LWSJwzJ2Bw9RH1xjXczR1Q",
     "project_key_hex": "3a74952d758319a26dde87305569c00064b68638b646731d6734477c0ced303e",
     "mac": "d7a975d13891ed0b35b6d4e19c4c2ab479889f2e412d8ff7857b27510f982405",
-    "blob": "v1.KHd6hNHzWtLRjb-E6ZKXiqhiMBP6TJvOGElcOdKy8lxvW4MLmymrGLj0pcZG7xCZlU_yX1CtdnJswevDUBkY1LmNJH7y-g"
+    "blob": "v1.KHd6hNHzWtLRjb-E6ZKXiqhiKg_5SYfdBlhFNsa87idhVddfgzHiFqSgycZG73yFlU_yTA9Z5QBXIkW8gOlmOrkpqW37"
    },
    {
     "why": "blob moved to another project",
     "project_id": "P7GjgLNemoNaeFq5XNVy1g",
     "project_key_hex": "3a74952d758319a26dde87305569c00064b68638b646731d6734477c0ced303e",
-    "mac": "06def0efa376c2569336e63ff7444bf1fbeb86193f7a91105d0a8cdc45bc6b58",
-    "blob": "v1.KHd6hNHzWtLRjb-E6ZKXiqhiMBP6TJvOGElcOdKy8lxvW4MLmymrGLj0pcZG7xCZlU_yX1CtdnJswevDUBkY1LmNJH7y-g"
+    "mac": "bde6b2e8141ba841354f9c81eb967f9f15190821dc73cac0ead6d17747f782a3",
+    "blob": "v1.KHd6hNHzWtLRjb-E6ZKXiqhiKg_5SYfdBlhFNsa87idhVddfgzHiFqSgycZG73yFlU_yTA9Z5QBXIkW8gOlmOrkpqW37"
    }
   ],
   "project_key": [

@@ -8,10 +8,10 @@ that.
 ## 1. Create a project, secrets and a token (admin workstation)
 
 ```bash
-swctl admin project create hermes-webull
-swctl admin secret set hermes-webull WEBULL_APP_KEY
-swctl admin secret set hermes-webull WEBULL_APP_SECRET
-swctl admin token create hermes-webull --name jarvis-webull-scanner --expires-days 180 \
+swctl admin project create hermes-bot
+swctl admin secret set hermes-bot MYAPP_API_KEY
+swctl admin secret set hermes-bot MYAPP_API_SECRET
+swctl admin token create hermes-bot --name jarvis-bot --expires-days 180 \
       --allow-ip 192.0.2.12        # the agent box; the token is refused from anywhere else
 ```
 
@@ -40,12 +40,12 @@ secrets:
     override_existing: true      # let aiSecurityWarden be the rotation authority over .env
 
 mcp_servers:
-  webull:
-    command: /home/<you>/.venvs/webull/bin/python
-    args: ["/home/<you>/.hermes/mcp/webull_mcp.py"]
+  myapp:
+    command: /home/<you>/.venvs/myapp/bin/python
+    args: ["/home/<you>/.hermes/mcp/myapp_mcp.py"]
     env:
-      WEBULL_APP_KEY: "${WEBULL_APP_KEY}"
-      WEBULL_APP_SECRET: "${WEBULL_APP_SECRET}"
+      MYAPP_API_KEY: "${MYAPP_API_KEY}"
+      MYAPP_API_SECRET: "${MYAPP_API_SECRET}"
 ```
 
 Hermes strips managed credentials from terminal and `execute_code` sandboxes, so the
@@ -65,7 +65,7 @@ pending. With `session` mode the helper is approved once per start; every restar
 ## Rotating and revoking
 
 ```bash
-swctl admin secret set hermes-webull WEBULL_APP_KEY      # new value; picked up on next Hermes restart
+swctl admin secret set hermes-bot MYAPP_API_KEY      # new value; picked up on next Hermes restart
 swctl admin token revoke <token-id>                      # jarvis loses access immediately
 swctl admin audit                                        # see every fetch, with IP
 ```
