@@ -546,7 +546,7 @@ class AdminApp:
         name = name.strip()
         if not ENV_NAME_RE.match(name):
             self.error("Secret names must be valid environment variable names: letters, digits and "
-                       "underscore, not starting with a digit (for example WEBULL_APP_KEY).")
+                       "underscore, not starting with a digit (for example MYAPP_API_KEY).")
             return False
         if not value:
             self.error("The value is empty.")
@@ -641,7 +641,7 @@ class AdminApp:
         return False
 
     def _on_new_project(self) -> None:
-        name = simpledialog.askstring("New project", "Project name (for example hermes-webull):", parent=self.root)
+        name = simpledialog.askstring("New project", "Project name (for example hermes-bot):", parent=self.root)
         if name:
             self.create_project(name)
 

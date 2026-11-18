@@ -11,9 +11,9 @@ This machine's stored tokens (never their secrets), and moving an older token fi
 
 Admin use::
 
-    swctl admin project create hermes-webull
-    swctl admin secret set hermes-webull WEBULL_APP_KEY        # prompts, value never in argv
-    swctl admin token create hermes-webull --name jarvis --expires-days 180
+    swctl admin project create hermes-bot
+    swctl admin secret set hermes-bot MYAPP_API_KEY        # prompts, value never in argv
+    swctl admin token create hermes-bot --name jarvis --expires-days 180
     swctl admin token set-approval <token-id> --approval session --session-ttl 8h --channel admin_ui
     swctl admin token set-actions <token-id> --rule 'gmail.read.*=allow' --rule 'gmail.label=window:30m' \
           --rule 'gmail.send=each' --channel admin_ui --channel push:telegram

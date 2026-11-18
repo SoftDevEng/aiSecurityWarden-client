@@ -43,8 +43,8 @@ def test_secret_roundtrip_and_aad_binding():
 
 def test_blob_does_not_contain_plaintext():
     pk, pid = crypto.new_key(), crypto.new_id()
-    mac, blob = crypto.encrypt_secret(pk, pid, "WEBULL_APP_KEY", "plaintext-value-123")
-    assert "WEBULL" not in blob and "plaintext" not in blob and "WEBULL" not in mac
+    mac, blob = crypto.encrypt_secret(pk, pid, "MYAPP_API_KEY", "plaintext-value-123")
+    assert "MYAPP" not in blob and "plaintext" not in blob and "MYAPP" not in mac
 
 
 def test_project_key_wrap_bound_to_token():

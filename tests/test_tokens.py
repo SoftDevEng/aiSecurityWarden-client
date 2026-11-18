@@ -151,15 +151,15 @@ def test_a_stale_lock_is_taken_over(tmp_path):
 
 def test_setup_by_name_refuses_another_tokens_code_without_using_it(tmp_path, http, setup_server):
     store = TokenStore(str(tmp_path / FILE_NAME))
-    code = setup_server.add(m(), name="webull-trader", project="Webull")
-    with pytest.raises(SecurityWardenError, match="'webull-trader'.*set up for 'jarvis-gmail'"):
+    code = setup_server.add(m(), name="shop-bot", project="Shop")
+    with pytest.raises(SecurityWardenError, match="'shop-bot'.*set up for 'jarvis-gmail'"):
         setup_into_store(URL, code, store, "jarvis-gmail", http=http)
     assert store.names() == [] and len(setup_server.codes) == 1          # still usable where it belongs
-    cred, name = setup_into_store(URL, code, store, "webull-trader", http=http)
-    assert name == "webull-trader" and store.entry(cred.id)["project"] == "Webull" and store.credential(cred.id) == cred
+    cred, name = setup_into_store(URL, code, store, "shop-bot", http=http)
+    assert name == "shop-bot" and store.entry(cred.id)["project"] == "Shop" and store.credential(cred.id) == cred
     # no name given: stored under the token's own name
     cred2, name2 = setup_into_store(URL, setup_server.add(m(), name="jarvis-gmail"), store, None, http=http)
-    assert name2 == "jarvis-gmail" and store.names() == ["jarvis-gmail", "webull-trader"]
+    assert name2 == "jarvis-gmail" and store.names() == ["jarvis-gmail", "shop-bot"]
     # a program set up by id refuses a second setup while its token is stored (no replace: it still works)
     with pytest.raises(SecurityWardenError, match="already holds"):
         setup_into_store(URL, setup_server.add(m(), name="jarvis-gmail"), store, "jarvis-gmail", token_id=cred2.id,
@@ -193,14 +193,14 @@ def _hub(tmp_path, http, name=None, token_id=None):
 
 def test_the_agent_sets_up_its_own_named_token(tmp_path, http, setup_server):
     hub, store, made = _hub(tmp_path, http, name="jarvis-gmail")
-    store.put(m(), name="webull-trader", server=URL)                       # another bot's, untouched
-    r = hub.call("securitywarden_setup", {"code": setup_server.add(m(), name="webull-trader")})
-    assert r.is_error and "webull-trader" in r.text and made == []
+    store.put(m(), name="shop-bot", server=URL)                       # another bot's, untouched
+    r = hub.call("securitywarden_setup", {"code": setup_server.add(m(), name="shop-bot")})
+    assert r.is_error and "shop-bot" in r.text and made == []
     cred = m()
     ok = hub.call("securitywarden_setup", {"code": setup_server.add(cred, name="jarvis-gmail")})
     assert not ok.is_error and store.credential(cred.id) == cred and cred.secret not in ok.text
     assert "Buy milk" in hub.call("notes_read", {"id": "n1"}).text
-    assert sorted(store.names()) == ["jarvis-gmail", "webull-trader"]
+    assert sorted(store.names()) == ["jarvis-gmail", "shop-bot"]
 
 
 def test_several_tokens_and_no_name(tmp_path, http, setup_server):
@@ -257,9 +257,9 @@ def test_swctl_and_sw_mcp_setup_into_the_shared_file(tmp_path, monkeypatch, caps
     monkeypatch.setenv("SW_TOKENS_FILE", str(tmp_path / FILE_NAME))
 
     a = m()
-    monkeypatch.setattr("sys.stdin", io.StringIO(setup_server.add(a, name="webull-trader") + "\n"))
+    monkeypatch.setattr("sys.stdin", io.StringIO(setup_server.add(a, name="shop-bot") + "\n"))
     swctl.main(["--server", URL, "setup", "--code-stdin"])
-    assert f"SW_TOKEN_ID={a.id} SW_TOKEN_NAME=webull-trader" in capsys.readouterr().err
+    assert f"SW_TOKEN_ID={a.id} SW_TOKEN_NAME=shop-bot" in capsys.readouterr().err
     b = m()
     monkeypatch.setattr("sys.stdin", io.StringIO(setup_server.add(b, name="jarvis-gmail") + "\n"))
     swmcp.main(["setup", "--server", URL, "--token-name", "jarvis-gmail", "--code-stdin"])

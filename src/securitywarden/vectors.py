@@ -55,7 +55,7 @@ def cred(kind: str, label: str) -> crypto.Credential:
 
 
 SECRET_VALUES = [
-    ("WEBULL_APP_KEY", "key-AAAA-1111"),
+    ("MYAPP_API_KEY", "key-AAAA-1111"),
     ("EMPTY", ""),
     ("QUOTES", 'He said "hi" \\ back/slash'),
     ("WHITESPACE", "line1\nline2\tTab\r\nCRLF"),
@@ -142,7 +142,7 @@ def build() -> dict[str, Any]:
                                    ("h3", "securitywarden/v1/secret-enc"))]
     v["wrap_keys"] = [{"credential": str(c), "wrap_key_hex": c.wrap_key.hex()} for c in (m, a)]
     v["name_mac"] = [{"project_key_hex": pkey.hex(), "name": n, "mac": crypto.name_mac(pkey, n)}
-                     for n in ("WEBULL_APP_KEY", "A", "café", "🔑")]
+                     for n in ("MYAPP_API_KEY", "A", "café", "🔑")]
 
     v["seal"] = []
     for i, (pt, aad) in enumerate(((b"", "sw1|test|empty"), (b"hello", "sw1|test|x"),
@@ -293,7 +293,7 @@ def build() -> dict[str, Any]:
         ("gmail.send", {"to": ["bob@example.com"], "subject": "Invoice 1042", "body_sha256": "ab" * 32,
                         "attachments": []}),
         ("gmail.label", {"ids": ["18c2", "18c3"], "add": ["Done"], "remove": ["INBOX"]}),
-        ("webull.order.place", {"symbol": "AAPL", "qty": 3, "side": "buy", "limit": "189.50", "dry": False,
+        ("shop.order.place", {"symbol": "AAPL", "qty": 3, "side": "buy", "limit": "189.50", "dry": False,
                                 "note": None, "unicode": "caf\u00e9 \u2713"}),
         ("x.y", {}),
     ]
@@ -347,12 +347,12 @@ def build() -> dict[str, Any]:
     }
     pol = {"channels": ["admin_ui", "push:telegram"], "timeout": 7200,
            "rules": [{"match": "gmail.read.*", "mode": "allow"}, {"match": "gmail.label", "mode": "window", "window": 1800},
-                     {"match": "gmail.delete", "mode": "deny"}, {"match": "webull.*", "mode": "each"}]}
+                     {"match": "gmail.delete", "mode": "deny"}, {"match": "shop.*", "mode": "each"}]}
     npol = approval.normalize_action_policy(pol)
     decisions = []
     for act, risk in (("gmail.read.search", "low"), ("gmail.read.message", "high"), ("gmail.label", "low"),
-                      ("gmail.label", "high"), ("gmail.delete", "high"), ("gmail.send", "high"), ("webull", "low"),
-                      ("webull.order.place", "medium"), ("gmail.readx.search", "low"),
+                      ("gmail.label", "high"), ("gmail.delete", "high"), ("gmail.send", "high"), ("shop", "low"),
+                      ("shop.order.place", "medium"), ("gmail.readx.search", "low"),
                       ("gmail.tools.approve", "high")):
         mode, window = approval.action_decision(npol, act, risk) if approval.ACTION_RE.match(act) else (None, None)
         decisions.append({"action": act, "risk": risk, "mode": mode, "window": window})
@@ -382,7 +382,7 @@ def build() -> dict[str, Any]:
     with seeded("mismatch"):
         # a valid ciphertext whose inner name does not hash to the mac it is stored under
         other_mac = crypto.name_mac(pkey, "OTHER")
-        payload = json.dumps({"n": "WEBULL_APP_KEY", "v": "x"}, separators=(",", ":")).encode()
+        payload = json.dumps({"n": "MYAPP_API_KEY", "v": "x"}, separators=(",", ":")).encode()
         k = crypto.hkdf(pkey, b"securitywarden/v1/secret-enc")
         swapped = crypto.seal(k, payload, f"{crypto.PREFIX}|secret|{pid}|{other_mac}")
     v["must_fail"] = {
