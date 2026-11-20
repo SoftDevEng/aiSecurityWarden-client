@@ -84,6 +84,11 @@ entry alone, and refuses to overwrite a different one (`--replace` swaps it, onl
 writes a secret into the settings. If it says it can't edit the file safely, show the user the entry it printed and
 where it goes.
 
+Hermes Agent only: if the user also wants Hermes to load its own API keys (model providers, MCP servers' keys) from
+aiSecurityWarden at start-up, run `swctl --server URL --token-name NAME hermes-plugin` and show the user the
+`hermes plugins enable` and `hermes config set` lines it prints; the user runs them and restarts Hermes. Don't run
+them yourself and don't restart Hermes.
+
 ## 6. Teach yourself the rules (optional, recommended)
 
 ```

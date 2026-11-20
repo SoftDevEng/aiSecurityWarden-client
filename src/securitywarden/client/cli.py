@@ -4,6 +4,10 @@ Machine use (e.g. as a Hermes Agent command helper)::
 
     SW_SERVER_URL=https://vault.example.com SW_ACCESS_TOKEN_FILE=~/.config/sw/token swctl export
 
+Hermes Agent: install the aiSecurityWarden secret source (a Hermes plugin that runs ``swctl export``)::
+
+    swctl --server https://app.aisecuritywarden.com --token-name jarvis hermes-plugin
+
 This machine's stored tokens (never their secrets), and moving an older token file into SW_Tokens.json::
 
     swctl tokens list
@@ -40,9 +44,11 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
+import httpx
+
 from .. import __version__
 from ..approval import CHANNELS, DEFAULTS, describe, describe_actions, parse_action_rule, parse_duration
-from .api import SecurityWardenClient, SecurityWardenError, action_lines
+from .api import ApprovalError, SecurityWardenClient, SecurityWardenError, TokenRejected, action_lines
 from ..crypto import CryptoError
 
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -115,6 +121,13 @@ def _save_mfa_session(c: SecurityWardenClient) -> None:
         json.dump(data, f)
 
 
+# Exit codes for scripts and the Hermes secret source (anything else failing: 1).
+EXIT_NETWORK = 3      # couldn't reach the server
+EXIT_TOKEN = 4        # the server refused the token (revoked, expired, deleted or wrong)
+EXIT_APPROVAL = 5     # an approval was denied, expired or cancelled
+EXIT_CONFIG = 6       # no server URL or no machine token on this computer
+
+
 def _die(msg: str, code: int = 1) -> "NoReturn":  # type: ignore[name-defined]
     print(f"swctl: {msg}", file=sys.stderr)
     raise SystemExit(code)
@@ -125,7 +138,7 @@ def _read_cred_file(path: str) -> str:
     try:
         st = os.stat(path)
     except FileNotFoundError:
-        _die(f"credential file not found: {path}")
+        _die(f"credential file not found: {path}", EXIT_CONFIG)
     if os.name == "posix" and st.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
         print(f"swctl: warning: {path} is readable by group/others; run: chmod 600 {path}", file=sys.stderr)
     with open(path, encoding="utf-8") as f:
@@ -135,7 +148,7 @@ def _read_cred_file(path: str) -> str:
 def _server(args: argparse.Namespace) -> str:
     url = args.server or os.environ.get("SW_SERVER_URL")
     if not url:
-        _die("no server URL (use --server or SW_SERVER_URL)")
+        _die("no server URL (use --server or SW_SERVER_URL)", EXIT_CONFIG)
     return url
 
 
@@ -154,7 +167,7 @@ def _machine_client(args: argparse.Namespace) -> SecurityWardenClient:
                              token_id=args.token_id or os.environ.get("SW_TOKEN_ID"), server=_server(args))
             if not tid:
                 _die(f"no machine token: none for this program in {store.path} (swctl setup), and no --token-file, "
-                     "SW_ACCESS_TOKEN_FILE or SW_ACCESS_TOKEN")
+                     "SW_ACCESS_TOKEN_FILE or SW_ACCESS_TOKEN", EXIT_CONFIG)
             cred = str(store.credential(tid))
         except SecurityWardenError as e:
             _die(str(e))
@@ -223,6 +236,26 @@ def cmd_export(args: argparse.Namespace) -> int:
             if "\n" in v or "\r" in v:
                 _die(f"secret {k} contains a newline; use --format json or shell")
             print(f"{k}={v}")
+    return 0
+
+
+def cmd_hermes_plugin(args: argparse.Namespace) -> int:
+    from . import hermes
+    try:
+        folder, changed = hermes.install(args.hermes_home, dry_run=args.dry_run)
+    except (hermes.HermesError, OSError) as e:
+        _die(str(e))
+    if not changed:
+        print(f"{folder} is already up to date.")
+    elif args.dry_run:
+        print(f"Would install the aiSecurityWarden secret source in {folder}.")
+    else:
+        print(f"Installed the aiSecurityWarden secret source in {folder}.")
+    print()
+    print("\n".join(hermes.next_steps(server=args.server or os.environ.get("SW_SERVER_URL"),
+                                     token_name=args.token_name or os.environ.get("SW_TOKEN_NAME"),
+                                     token_id=args.token_id or os.environ.get("SW_TOKEN_ID"),
+                                     swctl=hermes.swctl_path())))
     return 0
 
 
@@ -601,6 +634,11 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--yes", action="store_true", help="don't ask before installing")
     up.set_defaults(func=cmd_update)
 
+    hp = sub.add_parser("hermes-plugin", help="install the aiSecurityWarden secret source into Hermes Agent")
+    hp.add_argument("--hermes-home", help="Hermes's folder (default: $HERMES_HOME, else ~/.hermes)")
+    hp.add_argument("--dry-run", action="store_true", help="only say what would change")
+    hp.set_defaults(func=cmd_hermes_plugin)
+
     tk = sub.add_parser("tokens", help="the tokens stored on this machine (SW_Tokens.json)")
     tks = tk.add_subparsers(dest="action", required=True)
     tks.add_parser("list", help="list them (ids, names, servers; never the secrets)")
@@ -684,8 +722,14 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
+    except TokenRejected as e:
+        _die(str(e), EXIT_TOKEN)
+    except ApprovalError as e:
+        _die(str(e), EXIT_APPROVAL)
     except (SecurityWardenError, CryptoError) as e:
         _die(str(e))
+    except httpx.TransportError as e:
+        _die(f"can't reach the server: {type(e).__name__}: {e}", EXIT_NETWORK)
     except KeyboardInterrupt:
         return 130
     finally:

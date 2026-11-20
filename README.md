@@ -177,9 +177,17 @@ swctl run -- python my_bot.py     # run a command with secrets in its environmen
 
 ### Hermes Agent integration
 
-Hermes supports custom vaults through a **command helper** that prints `KEY=VALUE`
-lines at launch. That's exactly what `swctl export` does. See
-[examples/hermes/](https://github.com/SoftDevEng/aiSecurityWarden-client/tree/main/examples/hermes) for a wrapper script and config.
+aiSecurityWarden is a Hermes **secret source**: at start-up Hermes loads every secret the machine token may read,
+on Linux, macOS and Windows. The token stays in swctl; Hermes only gets the secrets.
+
+```bash
+swctl --server https://app.aisecuritywarden.com --token-name jarvis hermes-plugin
+```
+
+copies the plugin into `~/.hermes/plugins/` and prints the `hermes plugins enable` and `hermes config set` lines
+that turn it on. See
+[examples/hermes/](https://github.com/SoftDevEng/aiSecurityWarden-client/tree/main/examples/hermes) for the
+settings, approvals at start-up, and the older command-helper setup.
 
 ### AI agent tools with approval (`sw-mcp`)
 

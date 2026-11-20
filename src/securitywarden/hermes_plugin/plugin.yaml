@@ -1,0 +1,5 @@
+name: aisecuritywarden
+version: 0.7.13
+description: "aiSecurityWarden secret source: loads the API keys a revocable aiSecurityWarden machine token may read, end-to-end encrypted, optionally after a phone approval. Runs swctl; the token never enters Hermes."
+author: SoftDevEng
+kind: standalone
