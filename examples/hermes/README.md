@@ -30,22 +30,24 @@ swctl --server https://app.aisecuritywarden.com setup      # paste the one-time 
 
 ## 3. Install the plugin
 
-Either from a terminal:
+In the Hermes desktop app: **Capabilities → Plugins → Install from Git**, with
+
+```
+https://github.com/SoftDevEng/aiSecurityWarden-hermes
+```
+
+or from a terminal:
 
 ```bash
-swctl hermes-plugin
+hermes plugins install SoftDevEng/aiSecurityWarden-hermes --enable
 ```
 
-or in the Hermes desktop app: **Capabilities → Plugins → Install from Git**, with
+Hermes then updates it with **Update all** (or `hermes plugins update aisecuritywarden`). Keep the client current
+too (`pipx upgrade aisecuritywarden`): the plugin runs its swctl.
 
-```
-https://github.com/SoftDevEng/aiSecurityWarden-client/tree/main/src/securitywarden/hermes_plugin
-```
-
-(from a terminal: `hermes plugins install SoftDevEng/aiSecurityWarden-client#src/securitywarden/hermes_plugin --enable`).
-Installed from Git, Hermes's **Update all** keeps it current; copied by `swctl hermes-plugin`, run that again after
-updating the client. If the client is installed in Hermes's own Python, Hermes also finds the plugin there (an entry
-point).
+Without Git access, `swctl hermes-plugin` copies the same plugin from the installed client (run it again after each
+client update), and prints the settings this computer needs. If the client is installed in Hermes's own Python,
+Hermes also finds the plugin there (an entry point).
 
 ## 4. Turn it on
 
