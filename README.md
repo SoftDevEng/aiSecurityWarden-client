@@ -181,12 +181,12 @@ aiSecurityWarden is a Hermes **secret source**: at start-up Hermes loads every s
 on Linux, macOS and Windows. The token stays in swctl; Hermes only gets the secrets.
 
 ```bash
-swctl hermes-plugin
+hermes plugins install SoftDevEng/aiSecurityWarden-hermes --enable     # or Install from Git in the desktop app
+hermes config set secrets.aisecuritywarden.enabled true
 ```
 
-copies the plugin into `~/.hermes/plugins/` (or use **Install from Git** in the Hermes desktop app) and prints the
-lines that turn it on: with one token stored, `hermes plugins enable aisecuritywarden` and
-`hermes config set secrets.aisecuritywarden.enabled true`. See
+With one token stored that's all (`swctl hermes-plugin` copies the plugin from the client instead, and prints the
+settings a computer needs). See
 [examples/hermes/](https://github.com/SoftDevEng/aiSecurityWarden-client/tree/main/examples/hermes) for the
 settings, approvals at start-up, and the older command-helper setup.
 

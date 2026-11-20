@@ -1,7 +1,12 @@
 """aiSecurityWarden secret source for Hermes Agent.
 
-Hermes loads this at start-up (a directory plugin in ``$HERMES_HOME/plugins/aisecuritywarden/``, or this package's
-``hermes_agent.plugins`` entry point when the client is installed in Hermes's own Python) and asks it for secrets.
+Hermes loads this at start-up and asks it for secrets. It gets here one of three ways: installed from
+https://github.com/SoftDevEng/aiSecurityWarden-hermes (``hermes plugins install SoftDevEng/aiSecurityWarden-hermes``,
+or Install from Git in the desktop app; updates with Update all), copied by ``swctl hermes-plugin``, or as the client
+package's ``hermes_agent.plugins`` entry point when the client is installed in Hermes's own Python.
+
+The source of truth is the aiSecurityWarden client (``securitywarden/hermes_plugin/``); the aiSecurityWarden-hermes
+repository is a copy made at each release. Change it in the client.
 It runs ``swctl export --format json`` and hands the result to Hermes, which puts it in the environment.
 
 Why a separate process: the machine token stays in swctl. This file never reads the token store, the token or a

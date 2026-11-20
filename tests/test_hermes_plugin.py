@@ -364,3 +364,13 @@ def test_finds_swctl_in_pipx_folder(source, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     r = source.fetch({"enabled": True}, tmp_path)
     assert r.ok and r.secrets == {"K": "v"} and r.binary_path == Path(fake)
+
+
+def test_export_to_the_plugin_repo(tmp_path, capsys):
+    assert hermes.main([str(tmp_path)]) == 2                       # not a Git clone
+    (tmp_path / ".git").mkdir()
+    assert hermes.main([str(tmp_path)]) == 0
+    assert "updated: __init__.py, plugin.yaml" in capsys.readouterr().out
+    assert (tmp_path / "__init__.py").read_bytes() == hermes.plugin_files()["__init__.py"]
+    assert hermes.main([str(tmp_path)]) == 0
+    assert "already up to date" in capsys.readouterr().out

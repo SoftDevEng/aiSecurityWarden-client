@@ -68,6 +68,35 @@ def install(home: str | None = None, *, dry_run: bool = False) -> tuple[str, boo
     return folder, True
 
 
+def export(folder: str) -> list[str]:
+    """Write the plugin's files into ``folder`` (the aiSecurityWarden-hermes repository, at each release).
+    Returns the names that changed."""
+    changed = []
+    for name, data in plugin_files().items():
+        path = os.path.join(folder, name)
+        try:
+            with open(path, "rb") as f:
+                if f.read() == data:
+                    continue
+        except FileNotFoundError:
+            pass
+        with open(path, "wb") as f:
+            f.write(data)
+        changed.append(name)
+    return changed
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m securitywarden.client.hermes <aiSecurityWarden-hermes folder>``: copy the plugin there."""
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) != 1 or not os.path.isdir(os.path.join(args[0], ".git")):
+        print("usage: python -m securitywarden.client.hermes <your aiSecurityWarden-hermes clone>", file=sys.stderr)
+        return 2
+    changed = export(args[0])
+    print(f"updated: {', '.join(changed)}" if changed else "already up to date")
+    return 0
+
+
 def swctl_path() -> str:
     """The swctl that's running now, so Hermes finds the same one even with a different PATH (a service)."""
     found = shutil.which("swctl")
@@ -131,3 +160,7 @@ def next_steps(*, server: str | None, token_name: str | None, token_id: str | No
               "",
               "Run this again after updating aiSecurityWarden to update the plugin."]
     return lines
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
