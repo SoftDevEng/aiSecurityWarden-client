@@ -6,7 +6,7 @@ Machine use (e.g. as a Hermes Agent command helper)::
 
 Hermes Agent: install the aiSecurityWarden secret source (a Hermes plugin that runs ``swctl export``)::
 
-    swctl --server https://app.aisecuritywarden.com --token-name jarvis hermes-plugin
+    swctl hermes-plugin        # with several tokens stored: swctl --token-name jarvis hermes-plugin
 
 This machine's stored tokens (never their secrets), and moving an older token file into SW_Tokens.json::
 
@@ -162,15 +162,21 @@ def _machine_client(args: argparse.Namespace) -> SecurityWardenClient:
     else:
         from .tokens import TokenStore
         store = TokenStore()
+        url = args.server or os.environ.get("SW_SERVER_URL")
         try:
             tid = store.pick(args.token_name or os.environ.get("SW_TOKEN_NAME"),
-                             token_id=args.token_id or os.environ.get("SW_TOKEN_ID"), server=_server(args))
+                             token_id=args.token_id or os.environ.get("SW_TOKEN_ID"), server=url)
             if not tid:
                 _die(f"no machine token: none for this program in {store.path} (swctl setup), and no --token-file, "
                      "SW_ACCESS_TOKEN_FILE or SW_ACCESS_TOKEN", EXIT_CONFIG)
             cred = str(store.credential(tid))
         except SecurityWardenError as e:
-            _die(str(e))
+            _die(str(e), EXIT_CONFIG)
+        if not url:     # the server the token was set up with (swctl setup records it)
+            url = (store.entry(tid) or {}).get("server")
+            if not isinstance(url, str) or not url:
+                _die("no server URL (use --server or SW_SERVER_URL)", EXIT_CONFIG)
+        return SecurityWardenClient(url, cred, verify=_verify(args), on_approval=_announce_approval)
     return SecurityWardenClient(_server(args), cred, verify=_verify(args), on_approval=_announce_approval)
 
 
@@ -251,11 +257,16 @@ def cmd_hermes_plugin(args: argparse.Namespace) -> int:
         print(f"Would install the aiSecurityWarden secret source in {folder}.")
     else:
         print(f"Installed the aiSecurityWarden secret source in {folder}.")
+    from .tokens import TokenStore
+    try:
+        stored = TokenStore().entries()
+    except SecurityWardenError:
+        stored = []
     print()
     print("\n".join(hermes.next_steps(server=args.server or os.environ.get("SW_SERVER_URL"),
                                      token_name=args.token_name or os.environ.get("SW_TOKEN_NAME"),
                                      token_id=args.token_id or os.environ.get("SW_TOKEN_ID"),
-                                     swctl=hermes.swctl_path())))
+                                     swctl=hermes.swctl_path(), stored=stored)))
     return 0
 
 
