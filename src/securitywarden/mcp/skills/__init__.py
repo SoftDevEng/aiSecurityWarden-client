@@ -62,7 +62,8 @@ def frontmatter(skill: str) -> dict[str, str]:
 
 def default_dir(agent: str) -> str:
     if agent == "hermes":
-        home = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
+        from ...client.hermes import hermes_home
+        home = hermes_home()
     elif agent == "claude":
         home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
     else:

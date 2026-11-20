@@ -57,8 +57,8 @@ def claude_desktop_config() -> str:
 
 
 def hermes_config() -> str:
-    base = os.environ.get("HERMES_HOME") or os.path.join(os.path.expanduser("~"), ".hermes")
-    return os.path.join(base, "config.yaml")
+    from ..client.hermes import hermes_home
+    return os.path.join(hermes_home(), "config.yaml")
 
 
 def _backup(path: str) -> str | None:

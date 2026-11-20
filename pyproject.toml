@@ -36,6 +36,11 @@ sw-sudo = "securitywarden.sudo:main"
 # the same as sw-mcp, named after the package so `uvx aisecuritywarden serve` works (MCP Registry clients run that)
 aisecuritywarden = "securitywarden.mcp.cli:main"
 
+# Hermes Agent finds the secret source here when this package is installed in Hermes's own Python;
+# otherwise `swctl hermes-plugin` copies it into ~/.hermes/plugins/. Either way it's off until enabled.
+[project.entry-points."hermes_agent.plugins"]
+aisecuritywarden = "securitywarden.hermes_plugin:register"
+
 [project.entry-points."securitywarden.connectors"]
 gmail = "securitywarden.mcp.gmail:Gmail"
 
