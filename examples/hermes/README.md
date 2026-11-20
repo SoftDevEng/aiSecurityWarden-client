@@ -30,46 +30,51 @@ swctl --server https://app.aisecuritywarden.com setup      # paste the one-time 
 
 ## 3. Install the plugin
 
+Either from a terminal:
+
 ```bash
-swctl --server https://app.aisecuritywarden.com --token-name jarvis hermes-plugin
+swctl hermes-plugin
 ```
 
-This copies the plugin into `~/.hermes/plugins/aisecuritywarden/` (`$HERMES_HOME`, or `%LOCALAPPDATA%\hermes` on
-Windows) and prints the Hermes commands that turn it on, with your server, token name and the full path of swctl
-filled in:
+or in the Hermes desktop app: **Capabilities → Plugins → Install from Git**, with
+
+```
+https://github.com/SoftDevEng/aiSecurityWarden-client/tree/main/src/securitywarden/hermes_plugin
+```
+
+(from a terminal: `hermes plugins install SoftDevEng/aiSecurityWarden-client#src/securitywarden/hermes_plugin --enable`).
+Installed from Git, Hermes's **Update all** keeps it current; copied by `swctl hermes-plugin`, run that again after
+updating the client. If the client is installed in Hermes's own Python, Hermes also finds the plugin there (an entry
+point).
+
+## 4. Turn it on
 
 ```bash
-hermes plugins enable aisecuritywarden
+hermes plugins enable aisecuritywarden          # or the plugin's On switch in the desktop app
 hermes config set secrets.aisecuritywarden.enabled true
-hermes config set secrets.aisecuritywarden.swctl /home/you/.local/bin/swctl
-hermes config set secrets.aisecuritywarden.server_url https://app.aisecuritywarden.com
-hermes config set secrets.aisecuritywarden.token_name jarvis
 ```
 
-Then restart Hermes (the gateway and the dashboard, if they run). Run `swctl hermes-plugin` again after updating
-the client, to update the plugin with it.
+That's all when one token is stored on the computer: the plugin uses it, with the server `swctl setup` recorded for
+it. `swctl hermes-plugin` prints exactly the lines this computer needs, adding `token_name` when several tokens are
+stored and `swctl` when Hermes might not find it on its own.
 
-Instead of `swctl hermes-plugin` you can install it with Hermes from this repository:
-
-```bash
-hermes plugins install SoftDevEng/aiSecurityWarden-client#src/securitywarden/hermes_plugin --enable
-```
-
-If the client is installed in Hermes's own Python, Hermes also finds the plugin there (an entry point); it still
-needs `hermes plugins enable aisecuritywarden`.
+Then restart Hermes (the gateway and the dashboard, if they run).
 
 ### Settings (`secrets.aisecuritywarden` in config.yaml)
 
 | Key | Default | |
 |---|---|---|
 | `enabled` | `false` | Load the secrets at start-up |
-| `swctl` | PATH, then next to Hermes's Python | Full path of swctl (set it when Hermes runs as a service with a different PATH) |
-| `server_url` | `SW_SERVER_URL` | The server |
-| `token_name` / `token_id` | `SW_TOKEN_NAME` / `SW_TOKEN_ID` | Which stored token, when there's more than one |
+| `token_name` / `token_id` | `SW_TOKEN_NAME` / `SW_TOKEN_ID`, else the only stored token | Which stored token, when there are several |
+| `server_url` | `SW_SERVER_URL`, else the token's own server | Needed only for a token kept outside `SW_Tokens.json` |
+| `swctl` | PATH, next to Hermes's Python, then `~/.local/bin` | Full path of swctl |
 | `token_file` | `SW_ACCESS_TOKEN_FILE` | A token kept in a file of its own instead |
 | `ca_bundle` | `SW_CA_BUNDLE` | Your own CA, for a private server |
 | `timeout_seconds` | `180` | Longest wait, including a phone approval |
 | `override_existing` | `false` | Replace values already in `.env` or the shell |
+
+With several tokens on one computer, name the one whose project holds Hermes's keys: every secret in that project
+goes into Hermes's environment, so don't point it at a connector's token (for example the one sw-mcp uses for Gmail).
 
 A secret in the vault can't change these settings: Hermes never lets any source overwrite `SW_SERVER_URL`,
 `SW_ACCESS_TOKEN`, `SW_TOKEN_NAME`, `SW_ALLOW_HTTP` or the other `SW_*` variables swctl reads.

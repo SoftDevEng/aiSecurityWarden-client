@@ -276,16 +276,91 @@ def test_hermes_home(monkeypatch, tmp_path):
     assert hermes.hermes_home() == os.path.join(str(tmp_path), ".hermes")
 
 
-def test_command_prints_hermes_steps(tmp_path, capsys):
-    assert cli.main(["--server", "https://sw.example", "--token-name", "jarvis", "hermes-plugin",
-                     "--hermes-home", str(tmp_path)]) == 0
+def _store(tmp_path, monkeypatch, *names):
+    from securitywarden import crypto
+    from securitywarden.client.tokens import TokenStore
+    path = tmp_path / "SW_Tokens.json"
+    monkeypatch.setenv("SW_TOKENS_FILE", str(path))
+    for k in ("SW_SERVER_URL", "SW_ACCESS_TOKEN", "SW_ACCESS_TOKEN_FILE", "SW_TOKEN_NAME", "SW_TOKEN_ID"):
+        monkeypatch.delenv(k, raising=False)
+    store = TokenStore(str(path))
+    for name in names:
+        store.put(crypto.new_credential(crypto.KIND_MACHINE), name=name, server=f"https://{name}.example")
+    return store
+
+
+def test_command_prints_only_what_is_needed(tmp_path, monkeypatch, capsys):
+    _store(tmp_path, monkeypatch, "jarvis")
+    home = tmp_path / "h"
+    assert cli.main(["hermes-plugin", "--hermes-home", str(home)]) == 0
     out = capsys.readouterr().out
     assert "Installed the aiSecurityWarden secret source" in out
     assert "hermes plugins enable aisecuritywarden" in out
     assert "hermes config set secrets.aisecuritywarden.enabled true" in out
-    assert "secrets.aisecuritywarden.server_url https://sw.example" in out
-    assert "secrets.aisecuritywarden.token_name jarvis" in out
-    assert "secrets.aisecuritywarden.swctl " in out
-    assert cli.main(["hermes-plugin", "--hermes-home", str(tmp_path)]) == 0
+    # one token stored, with its server: nothing else to set
+    assert "token_name" not in out and "server_url" not in out
+    assert cli.main(["hermes-plugin", "--hermes-home", str(home)]) == 0
+    assert "already up to date" in capsys.readouterr().out
+
+
+def test_command_with_several_tokens_asks_for_a_name(tmp_path, monkeypatch, capsys):
+    _store(tmp_path, monkeypatch, "jarvis", "gmail")
+    assert cli.main(["hermes-plugin", "--hermes-home", str(tmp_path / "h")]) == 0
     out = capsys.readouterr().out
-    assert "already up to date" in out and "token_name <the name" in out
+    assert "secrets.aisecuritywarden.token_name <one of: gmail, jarvis>" in out
+    assert cli.main(["--token-name", "jarvis", "hermes-plugin", "--hermes-home", str(tmp_path / "h")]) == 0
+    assert "secrets.aisecuritywarden.token_name jarvis" in capsys.readouterr().out
+
+
+def test_command_without_a_token_says_to_set_one_up(tmp_path, monkeypatch, capsys):
+    _store(tmp_path, monkeypatch)
+    assert cli.main(["--server", "https://sw.example", "hermes-plugin", "--hermes-home", str(tmp_path / "h")]) == 0
+    out = capsys.readouterr().out
+    assert "No machine token is stored" in out and "swctl --server" in out
+    assert "secrets.aisecuritywarden.server_url https://sw.example" in out
+
+
+def test_swctl_setting_only_when_the_plugin_would_not_find_it(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pipx = os.path.join(str(tmp_path), ".local", "bin", "swctl")
+    assert not any("aisecuritywarden.swctl" in ln for ln in hermes.next_steps(server=None, token_name=None, token_id=None,
+                                                               swctl=pipx, stored=[{"name": "a", "server": "x"}]))
+    lines = hermes.next_steps(server=None, token_name=None, token_id=None, swctl="/opt/sw/bin/swctl",
+                              stored=[{"name": "a", "server": "x"}])
+    assert any(ln.endswith("secrets.aisecuritywarden.swctl /opt/sw/bin/swctl") for ln in lines)
+
+
+def test_export_uses_the_stored_tokens_server(tmp_path, monkeypatch):
+    _store(tmp_path, monkeypatch, "jarvis")
+    seen = {}
+
+    class Client:
+        def __init__(self, url, cred, **kw):
+            seen["url"] = url
+
+        def fetch(self):
+            return {"K": "v"}
+
+    monkeypatch.setattr(cli, "SecurityWardenClient", Client)
+    assert cli.main(["export", "--format", "json"]) == 0
+    assert seen["url"] == "https://jarvis.example"
+    # an explicit server still wins
+    assert cli.main(["--server", "https://jarvis.example/", "export"]) == 0
+
+
+def test_export_with_several_tokens_and_no_name_is_a_setting_problem(tmp_path, monkeypatch):
+    _store(tmp_path, monkeypatch, "jarvis", "gmail")
+    with pytest.raises(SystemExit) as e:
+        cli.main(["export"])
+    assert e.value.code == cli.EXIT_CONFIG
+
+
+@posix_only
+def test_finds_swctl_in_pipx_folder(source, tmp_path, monkeypatch):
+    (tmp_path / ".local" / "bin").mkdir(parents=True)
+    fake = fake_swctl(tmp_path / ".local" / "bin", 'print(json.dumps({"K": "v"}))')
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    r = source.fetch({"enabled": True}, tmp_path)
+    assert r.ok and r.secrets == {"K": "v"} and r.binary_path == Path(fake)

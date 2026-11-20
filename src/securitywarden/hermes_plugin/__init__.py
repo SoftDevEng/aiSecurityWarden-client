@@ -16,10 +16,11 @@ Configuration (``config.yaml``)::
     secrets:
       aisecuritywarden:
         enabled: true
-        swctl: /home/you/.local/bin/swctl     # optional: found on PATH or next to this Python otherwise
-        server_url: https://app.aisecuritywarden.com
-        token_name: jarvis                     # or token_id / token_file, or SW_* variables in .env
-        timeout_seconds: 180                   # room for a phone approval (the server waits up to 120 s)
+        # all optional:
+        token_name: jarvis          # needed only when several tokens are stored (or token_id / token_file)
+        server_url: https://...     # default: the server the token was set up with (swctl setup records it)
+        swctl: /opt/sw/bin/swctl    # default: PATH, next to this Python, then ~/.local/bin (pipx)
+        timeout_seconds: 180        # room for a phone approval (the server waits up to 120 s)
 
 Read-only, never prompts, never raises: every failure comes back as a ``FetchResult`` error with a kind.
 """
@@ -97,10 +98,12 @@ def find_swctl(cfg: dict) -> Optional[str]:
     found = shutil.which("swctl")
     if found:
         return found
-    scripts = Path(sys.executable).parent
-    for name in ("swctl.exe", "swctl") if os.name == "nt" else ("swctl",):
-        if (scripts / name).is_file():
-            return str(scripts / name)
+    names = ("swctl.exe", "swctl") if os.name == "nt" else ("swctl",)
+    # next to this Python (a shared venv), then pipx's folder: a service often runs without ~/.local/bin on PATH
+    for folder in (Path(sys.executable).parent, Path.home() / ".local" / "bin"):
+        for name in names:
+            if (folder / name).is_file():
+                return str(folder / name)
     return None
 
 
@@ -119,15 +122,16 @@ class AiSecurityWardenSource(SecretSource):
     label = "aiSecurityWarden"
     shape = "bulk"
     remediation_hints = {
-        ErrorKind.NOT_CONFIGURED: "Set up a machine token on this computer (`swctl setup`), then set "
-                                  "secrets.aisecuritywarden.server_url and token_name in config.yaml.",
+        ErrorKind.NOT_CONFIGURED: "Store a machine token on this computer (`swctl --server URL setup` with the "
+                                  "website's setup code); with several stored, set secrets.aisecuritywarden.token_name.",
         ErrorKind.BINARY_MISSING: "Install the client (`pipx install aisecuritywarden`) or set "
                                   "secrets.aisecuritywarden.swctl to the full path of swctl.",
         ErrorKind.AUTH_FAILED: "The approval was denied or expired, or this address isn't on the token's list: "
                                "check the token on the aiSecurityWarden website, then restart Hermes.",
         ErrorKind.AUTH_EXPIRED: "The server refused the machine token (revoked, expired or wrong): make a new "
                                 "one on the website and run `swctl setup` again.",
-        ErrorKind.NETWORK: "Couldn't reach the aiSecurityWarden server: check server_url and the network.",
+        ErrorKind.NETWORK: "Couldn't reach the aiSecurityWarden server: check the network (and "
+                           "secrets.aisecuritywarden.server_url, if set).",
         ErrorKind.TIMEOUT: "No answer in time. If the token needs a phone approval, approve it sooner or "
                            "raise secrets.aisecuritywarden.timeout_seconds (default 180).",
         ErrorKind.INTERNAL: "Run `swctl export --format json` in a shell (its output is your secrets: don't share it) to see "
@@ -137,9 +141,12 @@ class AiSecurityWardenSource(SecretSource):
     def config_schema(self) -> dict:
         return {
             "enabled": {"description": "Load this computer's aiSecurityWarden secrets at start-up", "default": False},
-            "swctl": {"description": "Full path of swctl (default: PATH, then next to Hermes's Python)", "default": ""},
-            "server_url": {"description": "Server URL (default: SW_SERVER_URL)", "default": ""},
-            "token_name": {"description": "The token's name in SW_Tokens.json (default: SW_TOKEN_NAME)", "default": ""},
+            "swctl": {"description": "Full path of swctl (default: PATH, next to Hermes's Python, ~/.local/bin)",
+                      "default": ""},
+            "server_url": {"description": "Server URL (default: SW_SERVER_URL, else the token's own server)",
+                           "default": ""},
+            "token_name": {"description": "Which stored token, when several are (default: SW_TOKEN_NAME)",
+                           "default": ""},
             "token_id": {"description": "The token's id in SW_Tokens.json (default: SW_TOKEN_ID)", "default": ""},
             "token_file": {"description": "A file holding the machine token (default: SW_ACCESS_TOKEN_FILE)",
                            "default": ""},

@@ -77,28 +77,49 @@ def swctl_path() -> str:
     return found or "swctl"
 
 
+def _found_without_setting(swctl: str) -> bool:
+    """Whether the plugin finds this swctl on its own: pipx's folder (~/.local/bin) is where it looks after PATH."""
+    if not os.path.isabs(swctl):
+        return True
+    # pipx's folder, and system folders that are on every service's PATH
+    folders = [os.path.join(os.path.expanduser("~"), ".local", "bin")]
+    if os.name != "nt":
+        folders += ["/usr/local/bin", "/usr/bin", "/bin"]
+    return os.path.normcase(os.path.dirname(swctl)) in {os.path.normcase(f) for f in folders}
+
+
 def _q(value: str) -> str:
     if sys.platform == "win32":
         return f'"{value}"' if any(c in value for c in ' &|<>^"') else value
     return shlex.quote(value)
 
 
-def next_steps(*, server: str | None, token_name: str | None, token_id: str | None, swctl: str) -> list[str]:
-    sets = [("enabled", "true"), ("swctl", swctl)]
-    if server:
-        sets.append(("server_url", server))
+def next_steps(*, server: str | None, token_name: str | None, token_id: str | None, swctl: str,
+               stored: list[dict] | None = None) -> list[str]:
+    """The Hermes commands that turn the source on, with only the settings this computer needs."""
+    stored = stored or []
+    sets = [("enabled", "true")]
+    if not _found_without_setting(swctl):
+        sets.append(("swctl", swctl))
     if token_id:
         sets.append(("token_id", token_id))
     elif token_name:
         sets.append(("token_name", token_name))
-    lines = ["Turn it on (each line once; the Hermes commands edit config.yaml for you):",
-             f"  hermes plugins enable {PLUGIN}"]
-    lines += [f"  hermes config set secrets.{PLUGIN}.{k} {_q(v)}" for k, v in sets]
-    if not server:
-        lines.append(f"  hermes config set secrets.{PLUGIN}.server_url https://app.aisecuritywarden.com   "
-                     "# or your own server")
-    if not (token_id or token_name):
-        lines.append(f"  hermes config set secrets.{PLUGIN}.token_name <the name you gave swctl setup>")
+    elif len(stored) > 1:
+        sets.append(("token_name", "<one of: " + ", ".join(e["name"] for e in stored) + ">"))
+    # swctl setup records each token's server, so the server is only needed for a token kept elsewhere
+    if server and not any(e.get("server") for e in stored):
+        sets.append(("server_url", server))
+    lines: list[str] = []
+    if not stored:
+        lines += ["No machine token is stored on this computer yet. Create one on the website, then run:",
+                  "  swctl --server https://app.aisecuritywarden.com setup      # or your own server",
+                  "and paste the one-time setup code. Then:", ""]
+    lines += ["Turn it on (the Hermes commands edit config.yaml for you):",
+              f"  hermes plugins enable {PLUGIN}"]
+    lines += [f"  hermes config set secrets.{PLUGIN}.{k} {_q(v) if not v.startswith('<') else v}" for k, v in sets]
+    if len(stored) > 1 and not (token_id or token_name):
+        lines.append("  (several tokens are stored here: name the one whose project holds Hermes's keys)")
     lines += ["",
               "Then restart Hermes (the gateway and the dashboard, if they run). At start-up it loads every",
               "secret the token's project holds into its environment; Hermes keeps them out of the agent's",
@@ -108,5 +129,5 @@ def next_steps(*, server: str | None, token_name: str | None, token_id: str | No
               "If you used secrets.command with swctl export before, turn that off:",
               "  hermes config set secrets.command.enabled false",
               "",
-              f"Run this again after updating aiSecurityWarden to update the plugin."]
+              "Run this again after updating aiSecurityWarden to update the plugin."]
     return lines
