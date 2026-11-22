@@ -180,13 +180,14 @@ swctl run -- python my_bot.py     # run a command with secrets in its environmen
 aiSecurityWarden is a Hermes **secret source**: at start-up Hermes loads every secret the machine token may read,
 on Linux, macOS and Windows. The token stays in swctl; Hermes only gets the secrets.
 
+It's in the official [Hermes plugin catalog](https://hermes-agent.nousresearch.com/marketplace/aisecuritywarden):
+
 ```bash
-hermes plugins install SoftDevEng/aiSecurityWarden-hermes --enable     # or Install from Git in the desktop app
+hermes plugins install aisecuritywarden --enable     # or search "aisecuritywarden" under Plugins in the desktop app
 hermes config set secrets.aisecuritywarden.enabled true
 ```
 
-With one token stored that's all (`swctl hermes-plugin` copies the plugin from the client instead, and prints the
-settings a computer needs). See
+With one token stored that's all. See
 [examples/hermes/](https://github.com/SoftDevEng/aiSecurityWarden-client/tree/main/examples/hermes) for the
 settings, approvals at start-up, and the older command-helper setup.
 

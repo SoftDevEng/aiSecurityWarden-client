@@ -30,24 +30,26 @@ swctl --server https://app.aisecuritywarden.com setup      # paste the one-time 
 
 ## 3. Install the plugin
 
-In the Hermes desktop app: **Capabilities → Plugins → Install from Git**, with
-
-```
-https://github.com/SoftDevEng/aiSecurityWarden-hermes
-```
-
-or from a terminal:
+It's in the official Hermes plugin catalog
+([its Marketplace page](https://hermes-agent.nousresearch.com/marketplace/aisecuritywarden)). In the Hermes desktop
+app, search for **aisecuritywarden** under **Capabilities → Plugins** and install it, or from a terminal:
 
 ```bash
-hermes plugins install SoftDevEng/aiSecurityWarden-hermes --enable
+hermes plugins install aisecuritywarden --enable
 ```
 
-Hermes then updates it with **Update all** (or `hermes plugins update aisecuritywarden`). Keep the client current
-too (`pipx upgrade aisecuritywarden`): the plugin runs its swctl.
+A catalog install is pinned to the commit Nous reviewed. When a new version is listed, the desktop app shows
+**Update to …** on the plugin (or run `hermes plugins update aisecuritywarden`). Keep the client current too
+(`pipx upgrade aisecuritywarden`): the plugin runs its swctl.
 
-Without Git access, `swctl hermes-plugin` copies the same plugin from the installed client (run it again after each
-client update), and prints the settings this computer needs. If the client is installed in Hermes's own Python,
-Hermes also finds the plugin there (an entry point).
+Other ways to install the same plugin:
+
+- **From Git**, following the repository's newest commit rather than the reviewed one: Install from Git with
+  `https://github.com/SoftDevEng/aiSecurityWarden-hermes`, or
+  `hermes plugins install SoftDevEng/aiSecurityWarden-hermes --enable`. Update all pulls new commits.
+- **Without Git or the catalog**: `swctl hermes-plugin` copies it from the installed client (run it again after each
+  client update), and prints the settings this computer needs.
+- If the client is installed in Hermes's own Python, Hermes also finds the plugin there (an entry point).
 
 ## 4. Turn it on
 
