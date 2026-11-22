@@ -144,6 +144,8 @@ def next_steps(*, server: str | None, token_name: str | None, token_id: str | No
         lines += ["No machine token is stored on this computer yet. Create one on the website, then run:",
                   "  swctl --server https://app.aisecuritywarden.com setup      # or your own server",
                   "and paste the one-time setup code. Then:", ""]
+    lines += ["(It's also in the Hermes plugin catalog: `hermes plugins install aisecuritywarden` installs the",
+              "reviewed version, which the desktop app updates. Use one or the other, not both.)", ""]
     lines += ["Turn it on (the Hermes commands edit config.yaml for you):",
               f"  hermes plugins enable {PLUGIN}"]
     lines += [f"  hermes config set secrets.{PLUGIN}.{k} {_q(v) if not v.startswith('<') else v}" for k, v in sets]

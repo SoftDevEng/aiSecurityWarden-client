@@ -85,9 +85,10 @@ writes a secret into the settings. If it says it can't edit the file safely, sho
 where it goes.
 
 Hermes Agent only: if the user also wants Hermes to load its own API keys (model providers, MCP servers' keys) from
-aiSecurityWarden at start-up, run `swctl hermes-plugin` (add `--token-name NAME` if several tokens are stored; the user
-can instead install `SoftDevEng/aiSecurityWarden-hermes` with Install from Git in the Hermes desktop app) and show the user the
-`hermes plugins enable` and `hermes config set` lines it prints; the user runs them and restarts Hermes. Don't run
+aiSecurityWarden at start-up, tell them to install the `aisecuritywarden` plugin from the Hermes plugin catalog
+(`hermes plugins install aisecuritywarden --enable`, or search for it under Plugins in the desktop app) and run
+`hermes config set secrets.aisecuritywarden.enabled true`, adding `token_name` if several tokens are stored
+(`swctl hermes-plugin` prints exactly what this computer needs). The user runs these and restarts Hermes. Don't run
 them yourself and don't restart Hermes.
 
 ## 6. Teach yourself the rules (optional, recommended)
