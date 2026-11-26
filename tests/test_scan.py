@@ -340,7 +340,7 @@ def test_report_columns_line_up_even_with_a_long_name(tmp_path):
     scan.report(run(h), out=out)
     rows = [ln for ln in out.getvalue().splitlines() if ln.startswith("   •") and "credentials:" in ln]
     assert len(rows) == 2
-    assert len({ln.index("~/.aws/credentials") for ln in rows}) == 1        # same column
+    assert len({ln.index(".aws") for ln in rows}) == 1                        # same column (any path separator)
 
 
 # -- what to do, in order (0.7.17) -------------------------------------------------------------------------------
