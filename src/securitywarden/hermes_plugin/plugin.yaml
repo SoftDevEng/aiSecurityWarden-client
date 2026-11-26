@@ -1,5 +1,6 @@
 name: aisecuritywarden
-version: 0.7.14
-description: "aiSecurityWarden secret source: loads the API keys a revocable aiSecurityWarden machine token may read, end-to-end encrypted, optionally after a phone approval. Runs swctl; the token never enters Hermes."
+version: 0.7.16
+description: "Keep your bots' API keys out of .env. Hermes loads them at startup from an encrypted vault; revoke a bot's access in one click, or require a phone approval."
 author: SoftDevEng
 kind: standalone
+requires_hermes: ">=0.21.1"

@@ -26,6 +26,7 @@ Configuration (``config.yaml``)::
         server_url: https://...     # default: the server the token was set up with (swctl setup records it)
         swctl: /opt/sw/bin/swctl    # default: PATH, next to this Python, then ~/.local/bin (pipx)
         timeout_seconds: 180        # room for a phone approval (the server waits up to 120 s)
+        allow_names: []             # LD_PRELOAD, PATH, HTTPS_PROXY ... are refused unless listed here
 
 Read-only, never prompts, never raises: every failure comes back as a ``FetchResult`` error with a kind.
 """
@@ -67,6 +68,36 @@ MAX_OUTPUT = 4 * 1024 * 1024
 # What swctl reads from the environment. Nothing else from the agent's environment reaches it.
 SW_ENV = ("SW_SERVER_URL", "SW_TOKEN_ID", "SW_TOKEN_NAME", "SW_ACCESS_TOKEN_FILE", "SW_ACCESS_TOKEN",
           "SW_TOKENS_FILE", "SW_CA_BUNDLE", "SW_ALLOW_HTTP")
+
+# Names that change how programs load code, find files or reach the network. A secret with one of these names would
+# take effect for Hermes and everything it starts (an `LD_PRELOAD` in the vault runs code in every process), so they
+# are refused unless the owner lists them in `secrets.aisecuritywarden.allow_names`. The same list is in the client
+# (securitywarden.client.envnames); a test keeps the two equal.
+DANGEROUS_NAMES = frozenset({
+    "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
+    "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE",
+    "NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS",
+    "PERL5LIB", "PERL5OPT", "RUBYLIB", "RUBYOPT", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS",
+    "BASH_ENV", "ENV", "PATH", "PATHEXT", "COMSPEC", "SHELL", "HOME", "USERPROFILE",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXEC_PATH",
+})
+DANGEROUS_PREFIXES = ("DYLD_",)
+
+
+def dangerous_name(name: str) -> bool:
+    """Whether a secret's name is one that changes how programs load or connect (case-insensitive: Windows)."""
+    up = name.upper()
+    return up in DANGEROUS_NAMES or up.startswith(DANGEROUS_PREFIXES)
+
+
+def _allowed_names(cfg: dict) -> set[str]:
+    raw = cfg.get("allow_names")
+    if isinstance(raw, str):
+        raw = [raw]
+    return {n.strip().upper() for n in raw if isinstance(n, str) and n.strip()} if isinstance(raw, list) else set()
+
 
 # swctl exit codes (0.7.13 and later); older versions exit 1 for everything and the text decides.
 EXIT_NETWORK, EXIT_TOKEN, EXIT_APPROVAL, EXIT_CONFIG = 3, 4, 5, 6
@@ -156,6 +187,9 @@ class AiSecurityWardenSource(SecretSource):
             "token_file": {"description": "A file holding the machine token (default: SW_ACCESS_TOKEN_FILE)",
                            "default": ""},
             "ca_bundle": {"description": "Custom CA bundle for TLS (default: SW_CA_BUNDLE)", "default": ""},
+            "allow_names": {"description": "Secret names to load even though they change how programs load or "
+                                           "connect (LD_PRELOAD, PATH, HTTPS_PROXY ...); refused otherwise",
+                            "default": []},
             "timeout_seconds": {"description": "Longest wait, including a phone approval", "default": DEFAULT_TIMEOUT},
             "override_existing": {"description": "Replace values already set in .env or the shell", "default": False},
         }
@@ -214,9 +248,13 @@ class AiSecurityWardenSource(SecretSource):
             return result.fail("swctl didn't print JSON (is it aiSecurityWarden's swctl?)", ErrorKind.INTERNAL)
         if not isinstance(data, dict):
             return result.fail("swctl printed JSON that isn't an object", ErrorKind.INTERNAL)
+        allowed = _allowed_names(cfg)
         for key, value in data.items():
             if not isinstance(key, str) or not is_valid_env_name(key):
                 result.warnings.append("skipped a secret whose name isn't an environment variable name")
+            elif dangerous_name(key) and key.upper() not in allowed:
+                result.warnings.append(f"refused {key}: it changes how programs load or connect "
+                                       f"(allow it with secrets.aisecuritywarden.allow_names if you meant it)")
             elif not isinstance(value, str) or value == "":
                 result.warnings.append(f"skipped {key}: empty value")
             else:

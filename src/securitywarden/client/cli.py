@@ -274,7 +274,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     cmd = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not cmd:
         _die("usage: swctl run -- <command> [args...]")
-    env = {**os.environ, **_validated(_machine_client(args).fetch())}
+    from .envnames import dangerous_name
+    allowed = {n.upper() for n in (args.allow_name or [])}
+    secrets = _validated(_machine_client(args).fetch())
+    for k in sorted(secrets):
+        if dangerous_name(k) and k.upper() not in allowed:
+            print(f"swctl: refused {k}: it changes how programs load or connect (use --allow-name {k} if you meant it)",
+                  file=sys.stderr)
+            del secrets[k]
+    env = {**os.environ, **secrets}
     if os.name == "posix":
         os.execvpe(cmd[0], cmd, env)
     return subprocess.call(cmd, env=env)
@@ -395,6 +403,8 @@ def cmd_project(args: argparse.Namespace) -> int:
 
 
 def cmd_secret(args: argparse.Namespace) -> int:
+    if args.action == "import":
+        return cmd_secret_import(args)
     c = _admin_client(args)
     if args.action == "set":
         if not ENV_NAME_RE.match(args.name):
@@ -420,6 +430,82 @@ def cmd_secret(args: argparse.Namespace) -> int:
     elif args.action == "delete":
         c.delete_secret(args.project, args.name)
         print(f"deleted {args.project}/{args.name}")
+    return 0
+
+
+DOTENV_LINE = re.compile(r"^\s*(?:export\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>.*?)\s*$")
+
+
+def read_dotenv(text: str) -> tuple[dict[str, str], list[str]]:
+    """NAME=value pairs from a .env file: ``export`` prefixes, single/double quotes and full-line or trailing
+    `` # comments`` are understood; ``${VAR}`` is kept as written (no expansion). Returns (pairs, problems), where a
+    problem names the line but never shows its value. A later line wins over an earlier one, as in dotenv."""
+    pairs: dict[str, str] = {}
+    problems: list[str] = []
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = DOTENV_LINE.match(raw)
+        if not m:
+            problems.append(f"line {n}: not NAME=value")
+            continue
+        value = m.group("value")
+        if value[:1] in ("'", '"'):
+            q = value[0]
+            end = value.find(q, 1)
+            if end == -1:
+                problems.append(f"line {n} ({m.group('name')}): unclosed quote (multi-line values aren't supported)")
+                continue
+            value = value[1:end]
+            if q == '"':
+                value = value.replace("\\n", "\n").replace('\\"', '"')
+        else:
+            value = re.split(r"\s+#", value, maxsplit=1)[0].strip()
+        pairs[m.group("name")] = value
+    return pairs, problems
+
+
+def cmd_secret_import(args: argparse.Namespace) -> int:
+    """Move a .env file's secrets into a project. Values come from the file (or stdin), never the command line, and
+    are never printed."""
+    try:
+        if args.file == "-":
+            text = sys.stdin.read()
+        else:
+            with open(args.file, encoding="utf-8-sig") as f:
+                text = f.read()
+    except OSError as e:
+        _die(f"can't read {args.file}: {e.strerror or e}")
+    pairs, problems = read_dotenv(text)
+    for p in problems:
+        print(f"swctl: skipped {p}", file=sys.stderr)
+    if args.only:
+        missing = [n for n in args.only if n not in pairs]
+        if missing:
+            _die(f"not in {args.file}: {', '.join(missing)}")
+        pairs = {n: pairs[n] for n in args.only}
+    empty = sorted(n for n, v in pairs.items() if not v)
+    pairs = {n: v for n, v in pairs.items() if v}
+    if not pairs:
+        _die(f"nothing to import from {args.file}")
+    c = _admin_client(args)
+    existing = set(c.get_secrets(args.project))
+    keep = sorted(n for n in pairs if n in existing and not args.overwrite)
+    todo = {n: v for n, v in pairs.items() if n not in keep}
+    if args.dry_run:
+        print(f"would import into {args.project}: {', '.join(sorted(todo)) or '(nothing)'}")
+    else:
+        for name in sorted(todo):
+            c.set_secret(args.project, name, todo[name])
+        print(f"imported into {args.project}: {', '.join(sorted(todo)) or '(nothing)'}")
+    if keep:
+        print(f"already in {args.project}, left as they are (--overwrite replaces them): {', '.join(keep)}")
+    if empty:
+        print(f"empty in the file, skipped: {', '.join(empty)}")
+    if todo and not args.dry_run:
+        print(f"Next: check the agent works with `swctl run` or its aiSecurityWarden token, then delete "
+              f"{args.file} and any copies of it (sw-scan lists them), and rotate keys an agent could already read.")
     return 0
 
 
@@ -632,6 +718,9 @@ def build_parser() -> argparse.ArgumentParser:
     e.set_defaults(func=cmd_export)
 
     r = sub.add_parser("run", help="run a command with secrets in its environment")
+    r.add_argument("--allow-name", action="append", metavar="NAME",
+                   help="load a secret even though its name changes how programs load or connect (LD_PRELOAD, PATH, "
+                        "HTTPS_PROXY ...); repeat for more")
     r.add_argument("command", nargs=argparse.REMAINDER)
     r.set_defaults(func=cmd_run)
 
@@ -673,6 +762,12 @@ def build_parser() -> argparse.ArgumentParser:
     for act in ("set", "get", "delete"):
         x = ses.add_parser(act); x.add_argument("project"); x.add_argument("name")
     x = ses.add_parser("list"); x.add_argument("project")
+    x = ses.add_parser("import", help="move a .env file's secrets into a project (values are never shown)")
+    x.add_argument("project")
+    x.add_argument("file", help="the .env file, or - to read it from stdin")
+    x.add_argument("--only", nargs="+", metavar="NAME", help="import just these names")
+    x.add_argument("--overwrite", action="store_true", help="replace secrets the project already has")
+    x.add_argument("--dry-run", action="store_true", help="only say which names would be imported")
     se.set_defaults(func=cmd_secret)
 
     to = a.add_parser("token")

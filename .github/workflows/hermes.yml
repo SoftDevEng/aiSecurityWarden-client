@@ -1,0 +1,53 @@
+name: Hermes compatibility
+
+# The aiSecurityWarden secret source (src/securitywarden/hermes_plugin) against real Hermes Agent: Hermes's own
+# secret-source conformance kit plus our plugin tests, with Hermes's agent.secret_sources.base instead of the
+# test stand-in. Oldest supported release, newest release, and main; weekly too, so a Hermes change shows up
+# here before users see it.
+
+on:
+  push:
+    branches: [main]
+    paths: ["src/securitywarden/hermes_plugin/**", "src/securitywarden/client/**", "tests/test_hermes_*",
+            "tests/hermes_stub.py", ".github/workflows/hermes.yml"]
+  pull_request:
+    paths: ["src/securitywarden/hermes_plugin/**", "src/securitywarden/client/**", "tests/test_hermes_*",
+            "tests/hermes_stub.py", ".github/workflows/hermes.yml"]
+  schedule:
+    - cron: "17 6 * * 1"          # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    strategy:
+      fail-fast: false
+      matrix:
+        # oldest release we support (the catalog entry's floor is 0.21.1; 0.21.6 is the oldest tag), newest
+        # release, and Hermes main. Bump the release when Hermes ships a new one.
+        hermes: ["v0.21.6", "v0.23.4", "main"]
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: NousResearch/hermes-agent
+          ref: ${{ matrix.hermes }}
+          path: hermes-agent
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - name: Conformance kit and plugin tests against Hermes ${{ matrix.hermes }}
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/hermes-agent
+        run: |
+          python -c "import agent.secret_sources.base as b; print('Hermes secret-source API', b.SECRET_SOURCE_API_VERSION)"
+          pytest -q tests/test_hermes_conformance.py tests/test_hermes_plugin.py
+          # the conformance kit must have run, not skipped
+          pytest -q tests/test_hermes_conformance.py | grep -E "^[0-9]+ passed"
