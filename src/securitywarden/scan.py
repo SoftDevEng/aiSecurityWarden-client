@@ -494,10 +494,13 @@ def report(res: Result, out=sys.stdout, show: int = 12) -> None:  # noqa: ANN001
         if not items:
             continue
         w(f"\n  {BOLD}{heading} ({len(items)}){RESET}\n")
+        # columns as wide as their longest entry in this group, so a long name doesn't push its row out of line
+        kind_w = max(34, *(len(f.kind) for f in items[:show]))
+        prev_w = max(16, *(len(f.preview) for f in items[:show]))
         for f in items[:show]:
             where = _shorten(f.where, res.home) + (f":{f.line}" if f.line else "")
             extra = f"  {DIM}same as {_shorten(f.copy_of, res.home)}{RESET}" if f.copy_of else ""
-            w(f"   {RED}•{RESET} {f.kind:<34} {f.preview:<16} {DIM}{where}{RESET}{extra}\n")
+            w(f"   {RED}•{RESET} {f.kind:<{kind_w}} {f.preview:<{prev_w}} {DIM}{where}{RESET}{extra}\n")
         if len(items) > show:
             w(f"   {DIM}… {len(items) - show} more (--all shows every one){RESET}\n")
         wrapped = textwrap.fill(advice, 100, initial_indent="   → ", subsequent_indent="     ")

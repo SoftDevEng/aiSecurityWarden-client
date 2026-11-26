@@ -328,3 +328,16 @@ def test_a_legacy_code_page_does_not_crash(home, tmp_path):
     r = subprocess.run([sys.executable, "-I", "-m", "securitywarden.scan", "--home", str(home)],
                        capture_output=True, timeout=60, env={**os.environ, "PYTHONIOENCODING": "cp1252"})
     assert r.returncode == 0, r.stderr
+
+
+def test_report_columns_line_up_even_with_a_long_name(tmp_path):
+    """A long setting name (aws_secret_access_key) widens its group's column instead of pushing its row out of line."""
+    h = tmp_path / "home"
+    (h / ".aws").mkdir(parents=True)
+    (h / ".aws" / "credentials").write_text("[default]\naws_access_key_id = AKIA" + "ABCDEFGHIJ234567"
+                                            + "\naws_secret_access_key = " + "Zq8" * 13 + "x\n")
+    out = io.StringIO()
+    scan.report(run(h), out=out)
+    rows = [ln for ln in out.getvalue().splitlines() if ln.startswith("   •") and "credentials:" in ln]
+    assert len(rows) == 2
+    assert len({ln.index("~/.aws/credentials") for ln in rows}) == 1        # same column
