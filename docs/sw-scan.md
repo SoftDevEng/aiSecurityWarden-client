@@ -53,13 +53,46 @@ Findings are grouped by what to do:
 
 1. **API keys and tokens**: move them into a vault and give the agent a scoped, revocable token instead; rotate any
    key an agent could already read. To move a `.env` file's keys: the project's Secrets tab on the website, or on a
-   server you run yourself, `swctl admin secret import PROJECT FILE` (values come from the file, are never shown,
-   and existing secrets are kept unless `--overwrite`).
+   server you run yourself and from your own computer (never the agent's), `swctl admin secret import PROJECT FILE`
+   (values come from the file, are never shown, and existing secrets are kept unless `--overwrite`).
 2. **Copies and backups**: delete them once the real one is in a vault. Deleting `.env` does nothing while
    `.env.bak-*` stays.
 3. **Other tools' sign-ins**: no vault can take these over. Run the agent as its own user so it can't read them.
 4. **Private keys without a passphrase**: `ssh-keygen -p -f FILE`, and an SSH agent.
-5. **aiSecurityWarden tokens**: check allowed addresses and approval are on.
+5. **aiSecurityWarden tokens**: the report lists them by name. An agent on the same machine can use them itself (an
+   address list only stops a copy used elsewhere), so give each one session approval and revoke unused ones.
+
+Some items get their own note when they differ from their group:
+
+- *keep it in its file, but rotate it*: Hermes's dashboard sign-in (`HERMES_DASHBOARD_BASIC_AUTH_*` and similar).
+  The dashboard reads it before any secret source loads, so in a vault it could start unlocked when the vault can't
+  be reached.
+- *Hermes's own sign-in*: `~/.hermes/auth.json` and each profile's `auth.json`. No vault can hold them; only running
+  Hermes as its own user protects them.
+- *also in other files: rotate it first*: a key that has been sitting in more than one place.
+- *an admin credential never belongs on an agent's machine*.
+
+### What to do, in this order
+
+The report ends with numbered steps and the **exposure after each one**, worked out from the findings:
+
+1. Delete the backup files holding old copies (live files are never on this list).
+2. Add a passphrase to private keys.
+3. Move the keys into a vault, delete them from their files and rotate them.
+4. Rotate the settings that must stay in their files.
+5. Turn on session approval for the aiSecurityWarden tokens on the machine; revoke unused ones.
+6. Run the agent as its own user: then nothing left in this folder is readable to it (exposure 0).
+
+On Linux it also says which agents run as the owner of the scanned folder (for example *Hermes Agent runs as
+jarvis*), from local process information. Only program names are used, never their arguments.
+
+### When an agent runs it
+
+When the output isn't a terminal (an agent's tool, a pipe), the report ends with a note for the agent: tell the
+person what the report says and offer the steps; don't carry them out alone; ask before deleting anything; never
+bring the aiSecurityWarden admin credential to that machine or run `swctl admin` there; key rotation is the person's
+job. `--json` carries the same note (`for_agents`), the steps with their scores (`plan`), the token names and the
+agents found.
 
 The **exposure score** is `100 × (1 − e^(−w/50))`, where `w` adds each distinct secret's weight (an AI provider key
 about 20, a generic password 8, a sign-in file 10) and 2 for each extra copy. One AI key scores about 33

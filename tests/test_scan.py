@@ -245,7 +245,7 @@ def test_scan_has_no_network_code():
     assert not imported & {"socket", "ssl", "http", "urllib", "httpx", "requests", "asyncio", "ftplib", "smtplib",
                            "subprocess", "xmlrpc", "webbrowser", "multiprocessing"}
     assert imported <= {"__future__", "argparse", "base64", "hashlib", "json", "math", "os", "re", "shutil", "sys",
-                        "textwrap", "time", "dataclasses", "pathlib"}
+                        "textwrap", "time", "dataclasses", "pathlib", "pwd"}
 
 
 def test_scan_is_read_only(home):
@@ -341,3 +341,108 @@ def test_report_columns_line_up_even_with_a_long_name(tmp_path):
     rows = [ln for ln in out.getvalue().splitlines() if ln.startswith("   •") and "credentials:" in ln]
     assert len(rows) == 2
     assert len({ln.index("~/.aws/credentials") for ln in rows}) == 1        # same column
+
+
+# -- what to do, in order (0.7.17) -------------------------------------------------------------------------------
+
+def test_plan_deletes_only_backup_files_and_scores_only_go_down(home):
+    res = run(home)
+    steps = scan.plan(res)
+    first = steps[0]
+    assert first["step"].startswith("Delete 1 backup file")
+    assert first["files"] == [str(home / ".hermes" / ".env.bak-2026-11-01")]      # never a live .env
+    scores = [res.score] + [s["score_after"] for s in steps if s["score_after"] is not None]
+    assert scores == sorted(scores, reverse=True)
+    assert steps[-1]["step"].startswith("Run the agent as its own user") and steps[-1]["score_after"] == 0
+
+
+def test_notes_say_what_differs_from_the_group(tmp_path):
+    h = tmp_path / "home"
+    (h / ".hermes" / "profiles" / "spyder").mkdir(parents=True)
+    (h / ".hermes" / ".env").write_text(f"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD={PASSWORD}\nANTHROPIC_API_KEY={ANT}\n")
+    (h / ".hermes" / ".env.bak-1").write_text(f"ANTHROPIC_API_KEY={ANT}\n")
+    (h / ".hermes" / "profiles" / "spyder" / "auth.json").write_text(json.dumps({"access_token": GHP}))
+    res = run(h)
+    note = {f.kind: f.note for f in res.findings if f.copy_of is None}
+    assert note["secret setting HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"] == scan.NOTE_KEEP
+    assert note["Anthropic API key"] == scan.NOTE_ROTATE_FIRST
+    [auth] = [f for f in res.findings if "auth.json" in f.where]
+    assert auth.category == "signin" and auth.note == scan.NOTE_HERMES_SIGNIN       # a profile's sign-in too
+    steps = scan.plan(res)
+    move = next(s for s in steps if s["step"].startswith("Move"))
+    assert "Move 1 key" in move["step"]                                              # not the dashboard password
+    assert any(s["step"].startswith("Rotate 1 setting") and s["score_after"] is None for s in steps)
+    out = io.StringIO()
+    scan.report(res, out=out)
+    assert scan.NOTE_KEEP in out.getvalue() and PASSWORD not in out.getvalue()
+
+
+def test_aisecuritywarden_tokens_are_named_never_shown(tmp_path):
+    h = tmp_path / "home"
+    (h / ".config" / "securitywarden").mkdir(parents=True)
+    tok = "sw1.m.abcdefgh." + "k" * 22 + ":" + "s" * 43
+    (h / ".config" / "securitywarden" / "SW_Tokens.json").write_text(json.dumps({"format": "sw-tokens-2", "tokens": {
+        "abcdefgh": {"name": "gmail-bot", "token": tok}, "x": {"name": "old", "replaced_by": "abcdefgh"}}}))
+    res = run(h)
+    assert res.sw_token_names == ["gmail-bot"]                   # live tokens only
+    out = io.StringIO()
+    scan.report(res, out=out)
+    text = out.getvalue()
+    flat = " ".join(text.split())
+    assert "Stored here: 1 token(s): gmail-bot" in text and "can use them itself" in flat
+    assert tok not in text and "s" * 20 not in text
+    assert any("session approval" in s["step"] for s in scan.plan(res))
+    assert scan.to_json(res)["aisecuritywarden_tokens"] == ["gmail-bot"]
+
+
+def test_agents_running_as_the_home_owner(tmp_path):
+    proc = tmp_path / "proc"
+    uid = os.stat(tmp_path).st_uid
+
+    def fake(pid, owner, argv):
+        d = proc / str(pid)
+        d.mkdir(parents=True)
+        (d / "status").write_text(f"Name:\tx\nUid:\t{owner}\t{owner}\t{owner}\t{owner}\n")
+        (d / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
+    fake(10, uid, ["/home/u/.hermes/hermes-agent/venv/bin/python", "/home/u/.local/bin/hermes", "gateway",
+                   "--token", "sk-ant-SECRET-IN-ARGS"])
+    fake(11, uid + 1, ["/usr/bin/claude"])                       # someone else's: not this home's owner
+    fake(12, uid, ["/usr/bin/vim", "notes.txt"])
+    (proc / "self").mkdir()
+    found = scan.agents_running_as(tmp_path, proc=str(proc))
+    assert len(found) == 1 and found[0].startswith("Hermes Agent runs as ")
+    assert "SECRET" not in " ".join(found)
+    assert scan.agents_running_as(tmp_path, proc=str(tmp_path / "missing")) == []
+
+
+def test_note_for_agents_when_not_a_terminal(home, capsys):
+    assert scan.main(["--home", str(home)]) == 0                 # captured output isn't a terminal: an agent's tool
+    out = " ".join(capsys.readouterr().out.split())
+    assert "For an AI agent reading this" in out and "Never bring the aiSecurityWarden admin" in out
+    term = io.StringIO()
+    scan.report(run(home), out=term, for_agent=False)
+    assert "For an AI agent" not in term.getvalue()
+    js = scan.to_json(run(home))
+    assert js["for_agents"] == scan.FOR_AGENTS and js["plan"] and "swctl admin" in js["for_agents"]
+
+
+def test_live_file_is_the_real_one_even_when_a_backup_is_seen_first(tmp_path):
+    h = tmp_path / "home"
+    (h / ".hermes" / "profiles" / "spyder").mkdir(parents=True)
+    (h / ".hermes" / ".env.bak-20261003").write_text(f"TELEGRAM_BOT_TOKEN={TG}\n")
+    (h / ".hermes" / "profiles" / "spyder" / ".env").write_text(f"TELEGRAM_BOT_TOKEN={TG}\n")
+    res = run(h)
+    [live] = [f for f in res.findings if f.where.endswith(".env") and "spyder" in f.where]
+    [bak] = [f for f in res.findings if f.backup]
+    assert live.category == "vault" and live.copy_of is None and live.note == scan.NOTE_ROTATE_FIRST
+    assert bak.category == "copies" and bak.copy_of == f"{live.where}:1"
+    move = next(s for s in scan.plan(res) if s["step"].startswith("Move"))
+    assert "Move 1 key" in move["step"] and move["files"] == [live.where]
+
+
+def test_two_findings_on_one_line_are_not_copies_of_each_other(tmp_path):
+    h = tmp_path / "home"
+    h.mkdir()
+    (h / ".git-credentials").write_text(f"https://someone:{GHP}@github.com\n")   # a token and a URL password
+    res = run(h)
+    assert len(res.findings) >= 1 and not any(f.note == scan.NOTE_ROTATE_FIRST for f in res.findings)

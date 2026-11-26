@@ -57,8 +57,10 @@ CATEGORIES = [
     ("sshkey", "Private keys without a passphrase",
      "Add a passphrase (ssh-keygen -p -f FILE) and use an SSH agent, or keep the key away from the agent's user."),
     ("sw", "aiSecurityWarden tokens",
-     "Readable by design: the token alone gets nothing outside its project. Make sure its allowed addresses and "
-     "approval are on, so a copied token is useless elsewhere."),
+     "Readable by design, and each reaches only its own project. But an agent on this machine can use them itself: "
+     "an address list only stops a copy used elsewhere. Give each one session approval (the token's Human approval "
+     "setting on the website), so a read the agent starts on its own waits for your tap, and revoke the ones nothing "
+     "uses (swctl tokens list shows them)."),
 ]
 CATEGORY_KEYS = [c[0] for c in CATEGORIES]
 
@@ -156,6 +158,12 @@ KNOWN_FILES = [
     ("AppData/Roaming/SecurityWarden/SW_Tokens.json", "aiSecurityWarden tokens", None),
 ]
 BINARY_SIGNIN = {".db"}                      # report presence, don't read
+# Hermes keeps a sign-in file per profile too
+HERMES_AUTH = re.compile(r"(?:^|/)\.hermes/(?:profiles/[^/]+/)?auth\.json$")
+# settings that must stay in a file: Hermes's dashboard reads its sign-in before any secret source has loaded, so
+# moved to a vault the dashboard could start unlocked when the vault can't be reached
+KEEP_IN_FILE = re.compile(r"^HERMES_DASHBOARD_(?:BASIC_AUTH_(?:PASSWORD|PASSWORD_HASH|SECRET)|SESSION_TOKEN|"
+                          r"DRAIN_SECRET)$")
 
 # file names worth reading anywhere under the home folder
 CANDIDATE = re.compile(
@@ -199,7 +207,7 @@ class Finding:
     line: int | None = None
     backup: bool = False
     copy_of: str | None = None       # the first place the same value was seen
-    note: str = ""
+    note: str = ""                   # what to do with this item, when it differs from its group's advice
 
 
 @dataclass
@@ -211,6 +219,8 @@ class Result:
     truncated: bool = False
     seconds: float = 0.0
     client_installed: bool = False
+    sw_token_names: list[str] = field(default_factory=list)    # names only, from SW_Tokens.json
+    agents: list[str] = field(default_factory=list)           # "Hermes Agent runs as jarvis" (Linux only)
 
     @property
     def distinct(self) -> int:
@@ -218,14 +228,18 @@ class Result:
 
     @property
     def score(self) -> int:
-        # each distinct secret counts its weight; each extra copy a little; 1 - e^(-x/50) keeps the scale honest:
-        # one AI API key ~ 33 (exposed), three ~ 70 (wide open)
-        w = sum(f.weight if f.copy_of is None else 2 for f in self.findings)
-        return min(100, round(100 * (1 - math.exp(-w / 50))))
+        return score_of(self.findings)
 
     @property
     def verdict(self) -> str:
         return "WIDE OPEN" if self.score >= 70 else "EXPOSED" if self.score >= 30 else "PRETTY TIGHT"
+
+
+def score_of(findings: list[Finding]) -> int:
+    """Each distinct secret counts its weight, each extra copy a little; 1 - e^(-x/50) keeps the scale honest:
+    one AI API key ~ 33 (exposed), three ~ 70 (wide open)."""
+    w = sum(f.weight if f.copy_of is None else 2 for f in findings)
+    return min(100, round(100 * (1 - math.exp(-w / 50))))
 
 
 def preview(value: str, prefix: str) -> str:
@@ -332,6 +346,8 @@ class Scanner:
             return
         where = str(path)
         backup = bool(BACKUP.search(path.name))
+        if signin_category is None and HERMES_AUTH.search(path.as_posix()):
+            signin_category, label = "signin", "Hermes sign-ins"
         if path.suffix.lower() in BINARY_SIGNIN:
             if signin_category:
                 self._add(label or "sign-in file", signin_category, where, None, "", 10, backup=backup)
@@ -343,6 +359,8 @@ class Scanner:
         except OSError:
             return
         self.result.files_read += 1
+        if path.name == "SW_Tokens.json":
+            self._token_names(text)
         if path.suffix.lower() == ".ppk":
             if re.search(r"^Encryption:\s*none\s*$", text, re.M):
                 self._add("PuTTY private key (no passphrase)", "sshkey", where, text, "", 12, backup=backup)
@@ -350,6 +368,17 @@ class Scanner:
         found = self.scan_text(text, where, settings_file=True, backup=backup, signin=signin_category)
         if not found and signin_category and text.strip() not in ("", "{}", "[]"):
             self._add(label or "sign-in file", signin_category, where, None, "", 10, backup=backup)
+
+    def _token_names(self, text: str) -> None:
+        """The names of the tokens in an aiSecurityWarden token file (names aren't secret; the tokens are)."""
+        try:
+            data = json.loads(text)
+        except ValueError:
+            return
+        tokens = data.get("tokens") if isinstance(data, dict) else None
+        if isinstance(tokens, dict):
+            names = {v.get("name") for v in tokens.values() if isinstance(v, dict) and v.get("token")}
+            self.result.sw_token_names = sorted(n for n in names if isinstance(n, str) and n)[:50]
 
     def scan_known(self) -> None:
         for rel, label, category in KNOWN_FILES:
@@ -423,6 +452,8 @@ class Scanner:
         if self.with_env:
             self.scan_env()
         self.result.client_installed = any(shutil.which(b) for b in ("swctl", "sw-mcp", "sw-sudo"))
+        add_notes(self.result)
+        self.result.agents = agents_running_as(self.home)
         self.result.seconds = round(time.monotonic() - start, 2)
         return self.result
 
@@ -447,6 +478,149 @@ def private_key_encrypted(block: str) -> bool:
 
 
 # ---------------------------------------------------------------------------------------------------------------
+# advice
+# ---------------------------------------------------------------------------------------------------------------
+
+NOTE_KEEP = "keep it in its file (the dashboard needs it before any vault loads), but rotate it"
+NOTE_HERMES_SIGNIN = "Hermes's own sign-in: no vault can hold it; only running Hermes as its own user protects it"
+NOTE_ROTATE_FIRST = "also in other files: rotate it first"
+NOTE_ADMIN = "an admin credential never belongs on an agent's machine: move it off this computer and change it"
+
+
+def add_notes(res: Result) -> None:
+    """What to do with an item when it differs from its group's advice."""
+    # the same value in several places: the note goes on its first place in a live file (not a backup)
+    def loc(f: Finding) -> str:
+        return f"{f.where}:{f.line}" if f.line else f.where
+    first_at: dict[str, Finding] = {}
+    for f in res.findings:
+        if f.copy_of is None:
+            first_at.setdefault(loc(f), f)
+    groups: dict[int, list[Finding]] = {}
+    for f in res.findings:
+        root = first_at.get(f.copy_of) if f.copy_of else f
+        if root is not None:
+            groups.setdefault(id(root), []).append(f)
+    rotate_first = set()
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        live = [m for m in members if not m.backup]
+        if live and members[0].backup:
+            # seen first in a backup (the walk's order): the live file is the real one, the backup the copy
+            real = live[0]
+            here = loc(real)
+            real.copy_of = None
+            if real.category == "copies":
+                real.category = "vault"
+            for m in members:
+                if m is not real:
+                    m.copy_of = here
+                    if m.category == "vault":
+                        m.category = "copies"
+        rotate_first.add(id((live or members)[0]))
+    for f in res.findings:
+        name = f.kind[len("secret setting "):] if f.kind.startswith("secret setting ") else ""
+        if name and KEEP_IN_FILE.match(name):
+            f.note = NOTE_KEEP
+        elif f.category == "signin" and HERMES_AUTH.search(f.where.replace(os.sep, "/")):
+            f.note = NOTE_HERMES_SIGNIN
+        elif "admin credential" in f.kind:
+            f.note = NOTE_ADMIN
+        elif id(f) in rotate_first:
+            f.note = NOTE_ROTATE_FIRST
+
+
+def plan(res: Result) -> list[dict]:
+    """The steps in order, each with what the score would be once it's done (and the ones before it)."""
+    left = list(res.findings)
+    steps: list[dict] = []
+
+    def step(text: str, gone: list[Finding], files: list[str] | None = None, scored: bool = True) -> None:
+        nonlocal left
+        if not gone:
+            return
+        left = [f for f in left if f not in gone]
+        steps.append({"step": text, "count": len(gone), "score_after": score_of(left) if scored else None,
+                      "files": files or []})
+
+    # backup files can simply go; a key repeated in another live file goes when that key moves to the vault
+    backups = [f for f in left if f.category == "copies" and f.backup]
+    step(f"Delete {len({f.where for f in backups})} backup file(s) holding old copies", backups,
+         sorted({f.where for f in backups}))
+    keys = [f for f in left if f.category == "sshkey"]
+    step(f"Add a passphrase to {len(keys)} private key(s), or move them off this user", keys,
+         sorted({f.where for f in keys}))
+    keep = [f for f in left if f.note == NOTE_KEEP]
+    movable = [f for f in left if f.category in ("vault", "copies") and f.note != NOTE_KEEP]
+    distinct = len({(f.kind, f.preview) for f in movable})       # the same key in two files counts once
+    step(f"Move {distinct} key(s) into a vault, delete them from their files, and rotate them", movable,
+         sorted({f.where for f in movable if not f.where.startswith("environment ")}))
+    if keep:
+        steps.append({"step": f"Rotate {len(keep)} setting(s) that must stay in their file (Hermes dashboard sign-in)",
+                      "count": len(keep), "score_after": None, "files": sorted({f.where for f in keep})})
+    tokens = [f for f in left if f.category == "sw"]
+    if tokens:
+        steps.append({"step": "Turn on session approval for the aiSecurityWarden tokens here; revoke unused ones",
+                      "count": len(tokens), "score_after": None, "files": []})
+    rest = [f for f in left if not f.where.startswith("environment ")]
+    step("Run the agent as its own user, never as this one: then it can't read what's left here", rest, scored=True)
+    return steps
+
+
+def agents_running_as(home: Path, proc: str = "/proc") -> list[str]:
+    """Agents that run as the owner of ``home``, from local process information (Linux only; read-only, and only
+    the program's name is used, never its arguments, which can hold secrets)."""
+    try:
+        owner = home.stat().st_uid
+        pids = [d for d in os.listdir(proc) if d.isdigit()]
+    except (OSError, AttributeError):
+        return []
+    found: set[str] = set()
+    for pid in pids[:5000]:
+        try:
+            with open(os.path.join(proc, pid, "status"), encoding="utf-8", errors="ignore") as fh:
+                uid = next((int(line.split()[1]) for line in fh if line.startswith("Uid:")), None)
+            if uid != owner:
+                continue
+            with open(os.path.join(proc, pid, "cmdline"), "rb") as fh:
+                argv = [a.decode("utf-8", "ignore") for a in fh.read(4096).split(b"\0") if a]
+        except (OSError, ValueError, StopIteration):
+            continue
+        label = _agent_label(argv)
+        if label:
+            found.add(label)
+    if not found:
+        return []
+    try:
+        import pwd
+        user = pwd.getpwuid(owner).pw_name
+    except (ImportError, KeyError):
+        user = f"user {owner}"
+    return [f"{label} runs as {user}" for label in sorted(found)]
+
+
+AGENT_NAMES = (("hermes", "Hermes Agent"), ("claude", "Claude Code"), ("codex", "Codex"), ("openclaw", "OpenClaw"))
+
+
+def _agent_label(argv: list[str]) -> str | None:
+    """Which agent a command line belongs to, by program and script names only."""
+    for a in argv[:3]:
+        base = os.path.basename(a).lower()
+        for name, label in AGENT_NAMES:
+            if base in (name, f"{name}.exe") or (name == "hermes" and base.startswith(("hermes_cli", "hermes-agent"))):
+                return label
+    return None
+
+
+FOR_AGENTS = (
+    "For an AI agent reading this: tell the person what this report says and offer the steps above in that order; "
+    "don't carry them out on your own. Ask before deleting any file. Never bring the aiSecurityWarden admin "
+    "credential to this machine or run swctl admin here: keys are moved on the website (the project's Secrets tab) "
+    "or from the person's own computer. Keys are rotated by the person, in each provider's own console.")
+
+
+# ---------------------------------------------------------------------------------------------------------------
 # report
 # ---------------------------------------------------------------------------------------------------------------
 
@@ -467,10 +641,17 @@ def to_json(res: Result) -> dict:
         "categories": [{"key": k, "heading": h, "advice": a,
                         "count": sum(1 for f in res.findings if f.category == k)} for k, h, a in CATEGORIES],
         "findings": [asdict(f) for f in res.findings],
+        "plan": plan(res),
+        "aisecuritywarden_tokens": res.sw_token_names,
+        "agents_running_as_this_user": res.agents,
+        "for_agents": FOR_AGENTS,
     }
 
 
-def report(res: Result, out=sys.stdout, show: int = 12) -> None:  # noqa: ANN001
+def report(res: Result, out=None, show: int = 12, for_agent: bool | None = None) -> None:  # noqa: ANN001
+    """The text report (to ``out``, default the current standard output). ``for_agent``: add the note for an AI
+    agent (default: when the output isn't a terminal, which is how an agent's tool runs it)."""
+    out = sys.stdout if out is None else out
     GREEN, RED, YEL, DIM, BOLD, RESET = _colors(out)
     col = RED if res.score >= 70 else YEL if res.score >= 30 else GREEN
     w = out.write
@@ -501,24 +682,41 @@ def report(res: Result, out=sys.stdout, show: int = 12) -> None:  # noqa: ANN001
             where = _shorten(f.where, res.home) + (f":{f.line}" if f.line else "")
             extra = f"  {DIM}same as {_shorten(f.copy_of, res.home)}{RESET}" if f.copy_of else ""
             w(f"   {RED}•{RESET} {f.kind:<{kind_w}} {f.preview:<{prev_w}} {DIM}{where}{RESET}{extra}\n")
+            if f.note:
+                w(f"     {' ' * kind_w} {YEL}↳ {f.note}{RESET}\n")
         if len(items) > show:
             w(f"   {DIM}… {len(items) - show} more (--all shows every one){RESET}\n")
         wrapped = textwrap.fill(advice, 100, initial_indent="   → ", subsequent_indent="     ")
         w(f"{DIM}{wrapped}{RESET}\n")
         envs = sorted({f.where for f in items if key == "vault" and not f.where.startswith("environment ")})
         if envs:
-            w(f"{DIM}     To move a file's keys: the project's Secrets tab on aisecuritywarden.com, or on a server you run\n"
-              f"     yourself: swctl admin secret import PROJECT {_shorten(envs[0], res.home)}{RESET}\n")
-    w(f"\n  {BOLD}What helps{RESET}\n")
-    w("   1. Run the agent as its own user, never as you: then it can't read most of the above at all.\n")
-    w("   2. Give it its keys from a vault, through a token you can revoke, instead of files it can read.\n")
-    w("   3. Delete the copies, and rotate every key an agent could already read.\n")
+            w(f"{DIM}     To move a file's keys: the project's Secrets tab on aisecuritywarden.com, or, on a server you run\n"
+              f"     yourself and from your own computer (never the agent's): swctl admin secret import PROJECT FILE{RESET}\n")
+        if key == "sw" and res.sw_token_names:
+            names = ", ".join(res.sw_token_names[:12]) + (" …" if len(res.sw_token_names) > 12 else "")
+            w(f"{DIM}     Stored here: {len(res.sw_token_names)} token(s): {names}{RESET}\n")
+    steps = plan(res)
+    w(f"\n  {BOLD}What to do, in this order{RESET}   {DIM}(exposure after each step){RESET}\n")
+    for n, st in enumerate(steps, 1):
+        after = st["score_after"]
+        tail = f"{GREEN if after < 30 else YEL if after < 70 else RED}→ {after}{RESET}" if after is not None else f"{DIM}(same){RESET}"
+        w(f"   {n}. {st['step']:<86} {tail}\n")
+        files = [_shorten(f, res.home) for f in st["files"]]
+        if files and len(st["files"]) <= 6:
+            w(f"{DIM}{textwrap.fill(', '.join(files), 100, initial_indent='      ', subsequent_indent='      ', break_on_hyphens=False, break_long_words=False)}{RESET}\n")
+        elif files:
+            w(f"{DIM}      {', '.join(files[:5])} and {len(files) - 5} more{RESET}\n")
+    if res.agents:
+        w(f"\n  {BOLD}{'; '.join(res.agents)}{RESET}: the same user that owns everything above, so step "
+          f"{len(steps)} is the one that\n  protects the rest.\n")
     if res.client_installed:
         w(f"\n  {DIM}The aiSecurityWarden client is installed here. It protects the secrets you've moved into it;\n"
           f"  the files above are still readable until you move and delete them.{RESET}\n")
     else:
         w(f"\n  {DIM}aiSecurityWarden does step 2: end-to-end encrypted keys, a phone approval before the agent gets\n"
           f"  them, and a gate on what it sends, deletes or runs. Free plan: https://aisecuritywarden.com{RESET}\n")
+    if for_agent if for_agent is not None else not (hasattr(out, "isatty") and out.isatty()):
+        w(f"\n{textwrap.fill(FOR_AGENTS, 100, initial_indent='  ', subsequent_indent='  ')}\n")
     w("\n")
 
 

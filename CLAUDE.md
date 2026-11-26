@@ -49,6 +49,10 @@ this package; run them there before releasing a change here.
 - Releases are tagged `vX.Y.Z[.devN]`; the server pins a tag. A `v*` tag publishes to PyPI as `aisecuritywarden`
   (`.github/workflows/release.yml`, trusted publishing); the tag must equal `__version__`. PyPI files can't be
   replaced: a mistake means a new version.
+- The Hermes plugin (`src/securitywarden/hermes_plugin/`) has its own version: the client release that last changed
+  it. Change the plugin → set `plugin.yaml`'s `version` to the client version being released and record it in
+  `PLUGIN_RELEASES` (`tests/test_hermes_plugin.py`, which fails with the hash to use). Leave it alone otherwise: each
+  plugin version is a catalog PR Nous has to review.
 - Release order: bump `__version__` and both `server.json` versions, merge, tag `vX.Y.Z` (the owner pushes tags;
   sessions open PRs only), PyPI publishes, then `mcp-publisher login github` + `publish`. Then the server is built and
   deployed; the full process is `docs/RELEASE.md` in the server repo.
