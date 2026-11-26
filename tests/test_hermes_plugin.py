@@ -374,3 +374,56 @@ def test_export_to_the_plugin_repo(tmp_path, capsys):
     assert (tmp_path / "__init__.py").read_bytes() == hermes.plugin_files()["__init__.py"]
     assert hermes.main([str(tmp_path)]) == 0
     assert "already up to date" in capsys.readouterr().out
+
+
+# -- names that change how programs load or connect (#31) ---------------------------------------------------
+
+def test_dangerous_names_match_the_clients_list():
+    """The plugin can't import the client, so it keeps a copy; they must stay equal."""
+    import securitywarden.hermes_plugin as plugin
+    from securitywarden.client import envnames
+    assert plugin.DANGEROUS_NAMES == envnames.DANGEROUS_NAMES
+    assert plugin.DANGEROUS_PREFIXES == envnames.DANGEROUS_PREFIXES
+
+
+@posix_only
+def test_plugin_refuses_dangerous_names_unless_allowed(source, tmp_path):
+    swctl = fake_swctl(tmp_path, '''
+        print(json.dumps({"OPENAI_API_KEY": "sk-1", "LD_PRELOAD": "/tmp/evil.so", "Path": "/evil",
+                          "DYLD_INSERT_LIBRARIES": "/tmp/x.dylib", "HTTPS_PROXY": "http://evil:8080"}))
+    ''')
+    r = source.fetch({"enabled": True, "swctl": swctl}, tmp_path)
+    assert r.ok and r.secrets == {"OPENAI_API_KEY": "sk-1"}
+    refused = [w for w in r.warnings if w.startswith("refused ")]
+    assert len(refused) == 4 and all("allow_names" in w for w in refused)
+    assert not any("/tmp/evil.so" in w or "evil:8080" in w for w in r.warnings)     # names only, never values
+    r = source.fetch({"enabled": True, "swctl": swctl, "allow_names": ["https_proxy", "Path"]}, tmp_path)
+    assert r.secrets == {"OPENAI_API_KEY": "sk-1", "HTTPS_PROXY": "http://evil:8080", "Path": "/evil"}
+    r = source.fetch({"enabled": True, "swctl": swctl, "allow_names": "LD_PRELOAD"}, tmp_path)
+    assert "LD_PRELOAD" in r.secrets and "Path" not in r.secrets
+    r = source.fetch({"enabled": True, "swctl": swctl, "allow_names": 5}, tmp_path)       # malformed: allows nothing
+    assert r.ok and r.secrets == {"OPENAI_API_KEY": "sk-1"}
+
+
+def test_swctl_run_refuses_dangerous_names_unless_allowed(monkeypatch, capsys):
+    class Client:
+        def fetch(self):
+            return {"API_KEY": "k", "LD_PRELOAD": "/tmp/evil.so", "NODE_OPTIONS": "--require /tmp/x.js"}
+
+    seen = {}
+
+    def run(cmd, env):
+        seen["env"] = env
+        return 0
+
+    monkeypatch.setattr(cli, "_machine_client", lambda args: Client())
+    monkeypatch.setattr(cli.os, "execvpe", lambda f, cmd, env: run(cmd, env))
+    monkeypatch.setattr(cli.subprocess, "call", lambda cmd, env: run(cmd, env))
+    monkeypatch.delenv("LD_PRELOAD", raising=False)
+    monkeypatch.delenv("NODE_OPTIONS", raising=False)
+    cli.main(["run", "--", "true"])
+    assert seen["env"]["API_KEY"] == "k" and "LD_PRELOAD" not in seen["env"] and "NODE_OPTIONS" not in seen["env"]
+    err = capsys.readouterr().err
+    assert "refused LD_PRELOAD" in err and "--allow-name" in err and "/tmp/evil.so" not in err
+    cli.main(["run", "--allow-name", "node_options", "--", "true"])
+    assert seen["env"]["NODE_OPTIONS"] == "--require /tmp/x.js" and "LD_PRELOAD" not in seen["env"]

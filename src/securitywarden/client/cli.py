@@ -274,7 +274,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     cmd = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not cmd:
         _die("usage: swctl run -- <command> [args...]")
-    env = {**os.environ, **_validated(_machine_client(args).fetch())}
+    from .envnames import dangerous_name
+    allowed = {n.upper() for n in (args.allow_name or [])}
+    secrets = _validated(_machine_client(args).fetch())
+    for k in sorted(secrets):
+        if dangerous_name(k) and k.upper() not in allowed:
+            print(f"swctl: refused {k}: it changes how programs load or connect (use --allow-name {k} if you meant it)",
+                  file=sys.stderr)
+            del secrets[k]
+    env = {**os.environ, **secrets}
     if os.name == "posix":
         os.execvpe(cmd[0], cmd, env)
     return subprocess.call(cmd, env=env)
@@ -632,6 +640,9 @@ def build_parser() -> argparse.ArgumentParser:
     e.set_defaults(func=cmd_export)
 
     r = sub.add_parser("run", help="run a command with secrets in its environment")
+    r.add_argument("--allow-name", action="append", metavar="NAME",
+                   help="load a secret even though its name changes how programs load or connect (LD_PRELOAD, PATH, "
+                        "HTTPS_PROXY ...); repeat for more")
     r.add_argument("command", nargs=argparse.REMAINDER)
     r.set_defaults(func=cmd_run)
 

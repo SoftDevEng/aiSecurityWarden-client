@@ -74,11 +74,16 @@ Then restart Hermes (the gateway and the dashboard, if they run).
 | `swctl` | PATH, next to Hermes's Python, then `~/.local/bin` | Full path of swctl |
 | `token_file` | `SW_ACCESS_TOKEN_FILE` | A token kept in a file of its own instead |
 | `ca_bundle` | `SW_CA_BUNDLE` | Your own CA, for a private server |
+| `allow_names` | `[]` | Secret names to load even though they change how programs load or connect |
 | `timeout_seconds` | `180` | Longest wait, including a phone approval |
 | `override_existing` | `false` | Replace values already in `.env` or the shell |
 
 With several tokens on one computer, name the one whose project holds Hermes's keys: every secret in that project
 goes into Hermes's environment, so don't point it at a connector's token (for example the one sw-mcp uses for Gmail).
+
+Secrets named `LD_PRELOAD`, `LD_LIBRARY_PATH`, `DYLD_*`, `PATH`, `PYTHONPATH`, `NODE_OPTIONS`, `BASH_ENV`,
+`HTTP(S)_PROXY`, `SSL_CERT_FILE` and other names that change how programs load code or connect are refused (Hermes's
+start-up output says which), unless listed in `allow_names`. `swctl run` refuses them too, unless `--allow-name NAME`.
 
 A secret in the vault can't change these settings: Hermes never lets any source overwrite `SW_SERVER_URL`,
 `SW_ACCESS_TOKEN`, `SW_TOKEN_NAME`, `SW_ALLOW_HTTP` or the other `SW_*` variables swctl reads.

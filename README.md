@@ -172,7 +172,7 @@ swctl setup                       # paste the one-time setup code the website (o
 
 swctl export                      # KEY=VALUE lines
 swctl export --format json
-swctl run -- python my_bot.py     # run a command with secrets in its environment
+swctl run -- python my_bot.py     # run a command with secrets in its environment (LD_PRELOAD, PATH, proxies... refused)
 ```
 
 ### Hermes Agent integration
