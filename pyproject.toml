@@ -33,6 +33,7 @@ dev = ["pytest>=8"]
 swctl = "securitywarden.client.cli:main"
 sw-mcp = "securitywarden.mcp.cli:main"
 sw-sudo = "securitywarden.sudo:main"
+sw-scan = "securitywarden.scan:main"
 # the same as sw-mcp, named after the package so `uvx aisecuritywarden serve` works (MCP Registry clients run that)
 aisecuritywarden = "securitywarden.mcp.cli:main"
 

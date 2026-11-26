@@ -241,6 +241,7 @@ a `SKILL.md` you wrote yourself is never replaced.
 | `swctl admin project create|list|delete NAME` | manage projects |
 | `swctl admin secret set|get|delete PROJECT NAME` | values read from a prompt or stdin |
 | `swctl admin secret list PROJECT` | names only |
+| `swctl admin secret import PROJECT FILE [--only NAME...] [--overwrite] [--dry-run]` | move a `.env` file's secrets into a project (`-` reads stdin); values are never shown |
 | `swctl admin token create PROJECT --name N [--expires-days D] [--allow-ip ADDR]...` | prints the token once; `--allow-ip` (address or CIDR, repeatable) pins where it may connect from |
 | `swctl admin token set-ips ID --allow-ip ADDR... \| --any` | replace or remove a token's allowed addresses |
 | `swctl admin token list [PROJECT]` | status, expiry, last used, last IP, allowed addresses, approval |
@@ -272,6 +273,22 @@ The machine prints a two-digit **match code** while it waits (`swctl: waiting fo
 to approve this session (match code 47, up to 120 s)...`); approve only if the prompt shows
 the same code. An approval works once, only for the process and address that asked, and
 ends when the token is revoked or its policy changes. Details: [docs/DESIGN.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/DESIGN.md#human-approval).
+
+### What can your agent read? (`sw-scan`)
+
+An agent that runs as you can read every file you can. `sw-scan` shows what that means on your machine: API keys
+in `.env` files and their forgotten `.bak` copies, other tools' sign-in files (cloud CLIs, `gh`, Docker, agent
+sign-ins), private keys without a passphrase, and keys in this terminal's environment, grouped by what to do about
+each, with an exposure score out of 100.
+
+```bash
+sw-scan              # the report
+sw-scan --json       # for scripts; --fail-at 30 exits 1 at a score of 30 or more
+```
+
+It never shows a secret (only its kind, a public prefix such as `sk-ant-` and the last 4 characters), has no
+network code, changes nothing, and is one standard-library file you can also run on its own
+(`python sw_scan.py`). Details and limits: [docs/sw-scan.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/sw-scan.md).
 
 ### Root commands with approval (`sw-sudo`, Linux)
 
