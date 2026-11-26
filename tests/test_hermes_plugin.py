@@ -245,10 +245,30 @@ def test_install_works_without_hermes(tmp_path):
     assert (tmp_path / "plugins" / "aisecuritywarden" / "__init__.py").is_file()
 
 
-def test_plugin_version_matches_the_client():
+# The plugin's version is the client release that last changed it, so a client release that leaves the plugin alone
+# doesn't make a new plugin release (and a catalog PR for Nous to review). Change the plugin -> set plugin.yaml's
+# version to the client version being released and put the new hash here.
+PLUGIN_RELEASES = {
+    "0.7.16": "6cca0445539b1d42637ceb6a6245e67940fa7c0722dffcf7dd3ffcc4e6c1bef5",
+}
+
+
+def _version_tuple(v: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in v.split(".dev")[0].split("."))
+
+
+def test_plugin_version_is_the_release_that_last_changed_it():
+    import hashlib
     from securitywarden import __version__
-    lines = hermes.plugin_files()["plugin.yaml"].decode().splitlines()     # Windows checkouts may have CRLF
-    assert f"version: {__version__}" in lines
+    files = hermes.plugin_files()
+    lines = files["plugin.yaml"].decode().splitlines()                       # Windows checkouts may have CRLF
+    [version] = [ln.split(":", 1)[1].strip() for ln in lines if ln.startswith("version:")]
+    assert _version_tuple(version) <= _version_tuple(__version__)
+    rest = "\n".join(ln for ln in lines if not ln.startswith("version:")).encode()
+    digest = hashlib.sha256(files["__init__.py"].replace(b"\r\n", b"\n") + b"\0" + rest).hexdigest()
+    assert PLUGIN_RELEASES.get(version) == digest, (
+        "the Hermes plugin changed: set version in src/securitywarden/hermes_plugin/plugin.yaml to the client "
+        f"version being released ({__version__}) and add it to PLUGIN_RELEASES with hash {digest}")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symlinks")
