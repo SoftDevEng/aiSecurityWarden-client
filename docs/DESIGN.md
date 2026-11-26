@@ -242,6 +242,24 @@ as the server-wide settings: secrets are never sent back (last four characters o
   for an account, the operator allows push); `400` otherwise. If a channel goes away later, requests still
   appear on the website (`admin_ui`) when the policy names it.
 
+
+### Alerts
+
+Notices without buttons, on push channels, for things the token's owner should hear about with nothing to decide.
+They name the token, the client address and the time, never a secret, secret name or the token.
+
+- **Unanswered start-up request.** A session (`auth`) or fetch request of a token with an approval policy expired with
+  nobody answering: the client got no secrets from it, so a program that was starting up (an agent's secret source,
+  `swctl export` at boot) now runs without them. Sent once, when the server marks the request expired (whether the
+  client's late poll or the prompt housekeeping sees it first), on the policy's own push channels. Not for denied or
+  cancelled requests (a person acted), nor for action requests.
+- **Refused token.** A machine token presented with its **correct** secret but refused: revoked, expired, or from an
+  address not on its list. Either a program still uses a token it shouldn't, or someone else holds it. On all of the
+  token's project's push channels, at most once per token and reason an hour (counted in memory; programs retry). A
+  wrong secret never alerts, so guessing can't be used to send messages.
+
+Both use the token's own project's push settings, like prompts (invariant 12 in the server). A client that can't reach
+the server can't be reported; its own log is the place for that.
 ### Abuse limits and audit
 
 `max_pending` outstanding requests per token and `max_per_hour` requests per token (`429`
