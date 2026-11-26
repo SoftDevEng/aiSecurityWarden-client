@@ -247,8 +247,8 @@ def test_install_works_without_hermes(tmp_path):
 
 def test_plugin_version_matches_the_client():
     from securitywarden import __version__
-    text = hermes.plugin_files()["plugin.yaml"].decode()
-    assert f"version: {__version__}\n" in text
+    lines = hermes.plugin_files()["plugin.yaml"].decode().splitlines()     # Windows checkouts may have CRLF
+    assert f"version: {__version__}" in lines
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symlinks")
@@ -322,12 +322,14 @@ def test_command_without_a_token_says_to_set_one_up(tmp_path, monkeypatch, capsy
 
 def test_swctl_setting_only_when_the_plugin_would_not_find_it(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))         # what expanduser reads on Windows
     pipx = os.path.join(str(tmp_path), ".local", "bin", "swctl")
     assert not any("aisecuritywarden.swctl" in ln for ln in hermes.next_steps(server=None, token_name=None, token_id=None,
                                                                swctl=pipx, stored=[{"name": "a", "server": "x"}]))
-    lines = hermes.next_steps(server=None, token_name=None, token_id=None, swctl="/opt/sw/bin/swctl",
+    other = str(tmp_path / "opt" / "swctl")                  # absolute on every system
+    lines = hermes.next_steps(server=None, token_name=None, token_id=None, swctl=other,
                               stored=[{"name": "a", "server": "x"}])
-    assert any(ln.endswith("secrets.aisecuritywarden.swctl /opt/sw/bin/swctl") for ln in lines)
+    assert any("secrets.aisecuritywarden.swctl " in ln and "opt" in ln for ln in lines)
 
 
 def test_export_uses_the_stored_tokens_server(tmp_path, monkeypatch):

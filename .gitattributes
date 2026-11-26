@@ -1,0 +1,2 @@
+# The Hermes plugin's files are copied byte for byte into aiSecurityWarden-hermes: keep them LF on every checkout
+src/securitywarden/hermes_plugin/* text eol=lf
