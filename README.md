@@ -69,6 +69,11 @@ read any secret**. A full copy of the server's database is useless without a tok
 
 ## Threat model
 
+The full threat model (assets, trust boundaries, adversaries, every threat with its mitigation and what's left, and
+mappings to the OWASP Top 10 for LLM and agentic applications) is in
+[docs/THREAT-MODEL.md](https://github.com/SoftDevEng/aiSecurityWarden-client/blob/main/docs/THREAT-MODEL.md).
+In short:
+
 **Protects against**
 - Secrets at rest on agent machines: only a token sits on disk, not your API keys.
   Backups, copied dotfiles and logs leak a token you can revoke in one command.
