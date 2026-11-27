@@ -9,7 +9,7 @@ Please **don't** open a public issue. Use GitHub's
 for this repository. Expect an acknowledgement within a few days.
 
 Helpful details: affected version, a description, reproduction steps, and the impact
-(e.g. which guarantee in the [threat model](README.md#threat-model) it breaks).
+(e.g. which guarantee in the [threat model](docs/THREAT-MODEL.md) it breaks).
 
 ## Scope
 
